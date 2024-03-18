@@ -9,23 +9,69 @@ class BasKeyword:
     MINUS       = 1002
     MUL         = 1003
     DIV         = 1004
+    YEN         = 1005
+    MOD         = 1006
+    SHR         = 1007
+    SHL         = 1008
+    EQ          = 1009
+    NE          = 1010
+    GT          = 1011
+    LT          = 1012
+    GE          = 1013
+    LE          = 1014
+    NOT         = 1015
+    AND         = 1016
+    OR          = 1017
+    XOR         = 1018
 
     EOL         = 9999
+
+    keyword = {
+        'mod'       : MOD,
+        'shr'       : SHR,
+        'shl'       : SHL,
+        'not'       : NOT,
+        'and'       : AND,
+        'or'        : OR,
+        'xor'       : XOR,
+    }
 
     keywordop = {
         '+'         : PLUS,
         '-'         : MINUS,
         '*'         : MUL,
         '/'         : DIV,
+        '\\'        : YEN,
+        '='         : EQ,
+        '<>'        : NE,
+        '>='        : GE,
+        '<='        : LE,
+        '>'         : GT,
+        '<'         : LT,
     }
+
+    @classmethod
+    def find(cls, word):
+        """wordが予約語ならその値を返す"""
+        return cls.keyword.get(word, None)
+
+    @classmethod
+    def findop(cls, word):
+        """wordの先頭に演算子があればそれと残りの文字列を返す"""
+        if w := cls.keywordop.get(word[:2], None):
+            return (w, word[2:])
+        if w := cls.keywordop.get(word[:1], None):
+            return (w, word[1:])
+        return None        
 
 class BasToken:
     """X-BASICのトークン"""
     SYMBOL   = 0
     INT      = 1
-    STR      = 2
-    KEYWORD  = 3
-    VARIABLE = 4
+    FLOAT    = 2
+    STR      = 3
+    KEYWORD  = 4
+    VARIABLE = 5
 
     def __init__(self, type, value):
         self.type = type
@@ -37,6 +83,9 @@ class BasToken:
     @classmethod
     def int(cls, value):
         return cls(cls.INT, value)
+    @classmethod
+    def float(cls, value):
+        return cls(cls.FLOAT, value)
     @classmethod
     def str(cls, value):
         return cls(cls.STR, value)
@@ -59,6 +108,16 @@ class BasToken:
     def iskeyword(self, value):
         """予約語がvalueであればTrue"""
         return self.type == self.KEYWORD and self.value == value
+
+    def resulttype(self, a=None):
+        """トークン同士の演算結果に与える型を得る(strはエラー)"""
+        if self.type == self.STR:
+            return None
+        if a != None:
+            if a.type == self.STR:
+               return None
+            rty = self.type if self.type == a.type else self.FLOAT     # intとfloatの演算結果はfloat
+        return rty
 
     def __repr__(self):
         return f'({self.type},{self.value})'
@@ -116,17 +175,25 @@ class BasTokenGen:
         # 2進数 &Bxxxx
         elif m := ismatch(r'&[bB]([01]+)'):
             return BasToken.int('0b' + m.group(1))  # 0XXXX に変換
+        # 実数 0. or .0 or 0#
+        elif (m := ismatch(r'(\d+\.\d*([eE]\d+)?)#?')) or \
+             (m := ismatch(r'(\d*\.\d+([eE]\d+)?)#?')) or \
+             (m := ismatch(r'(\d+)#')):
+            return BasToken.float('(double)' + m.group(1))
         # 整数
         elif m := ismatch(r'(\d+)'):
             # 冒頭の0は8進数に解釈されてしまうので取り除く
             return BasToken.int(re.sub(r'^0*(.)',r'\1',m.group(0)))
         # 変数名または予約語
         elif m := ismatch(r'[a-zA-Z_][a-zA-Z0-9_$]*'):
-            return BasToken.variable(m.group(0))
+            if k := BasKeyword.find(m.group(0)):
+                return BasToken.keyword(k)
+            else:           # 変数名の '$' は 'S' に置き換える
+                return BasToken.variable(m.group(0).replace('$','S'))
         # 演算子
-        elif w := BasKeyword.keywordop.get(self.line[:1], None):
-            self.line = self.line[1:]
-            return BasToken.keyword(w)
+        elif w := BasKeyword.findop(self.line):
+            self.line = w[1]
+            return BasToken.keyword(w[0])
         # その他の文字は記号
         else:
             c = self.line[0]
@@ -180,15 +247,77 @@ class Bas2C:
                 return t
             return self.t.unfetch(t)
 
+        def opxor(self):
+            if not (r := opor(self)):
+                return None
+            while self.checkkeyword(BasKeyword.XOR):
+                a = self.expect(opor(self))
+                self.expect(r.resulttype(a))
+                r = BasToken.int(f'((int){r.value} ^ (int){a.value})')
+            return r
+
+        def opor(self):
+            if not (r := opand(self)):
+                return None
+            while self.checkkeyword(BasKeyword.OR):
+                a = self.expect(opand(self))
+                self.expect(r.resulttype(a))
+                r = BasToken.int(f'((int){r.value} | (int){a.value})')
+            return r
+
+        def opand(self):
+            if not (r := opnot(self)):
+                return None
+            while self.checkkeyword(BasKeyword.AND):
+                a = self.expect(opnot(self))
+                self.expect(r.resulttype(a))
+                r = BasToken.int(f'((int){r.value} & (int){a.value})')
+            return r
+
+        def opnot(self):
+            if self.checkkeyword(BasKeyword.NOT):
+                r = self.expect(opnot(self))
+                self.expect(r.resulttype())
+                return BasToken.int(f'(~((int){r.value}))')
+            return cmp(self)
+
+        def cmp(self):
+            if not (r := shrshl(self)):
+                return None
+            map = {BasKeyword.EQ: ('==', 0x3d20),\
+                   BasKeyword.NE: ('!=', 0x3c3e),\
+                   BasKeyword.GT: ('>',  0x3e20),\
+                   BasKeyword.LT: ('<' , 0x3c20),\
+                   BasKeyword.GE: ('>=', 0x3e3d),\
+                   BasKeyword.LE: ('<=', 0x3c3d)}
+            while p := checkops(self, map):
+                a = self.expect(shrshl(self))
+                if r.istype(BasToken.STR):
+                    self.expect(a.istype(BasToken.STR))
+                    r = BasToken.int(f'(b_strcmp({r.value},0x{map[p.value][1]:x},{a.value})?-1:0)')
+                else:
+                    r = BasToken.int(f'-({r.value} {map[p.value][0]} {a.value})')
+            return r
+
+        def shrshl(self):
+            if not (r := addsub(self)):
+                return None
+            map = {BasKeyword.SHR: '>>', BasKeyword.SHL: '<<'}
+            while p := checkops(self, map):
+                a = self.expect(addsub(self))
+                self.expect(r.resulttype(a))
+                r = BasToken.int(f'((int){r.value} {map[p.value]} (int){a.value})')
+            return r
+
         def addsub(self):
-            if not (r := muldiv(self)):
+            if not (r := mod(self)):
                 return None
             if r.istype(BasToken.STR):        # 文字列の連結
                 if not self.checkkeyword(BasKeyword.PLUS):
                     return r
                 r = BasToken.str(f'b_stradd(strtmp,{r.value},')
                 while True:
-                    a = self.expect(muldiv(self))
+                    a = self.expect(mod(self))
                     self.expect(a.istype(BasToken.STR))
                     r = BasToken.str(f'{r.value}{a.value},')
                     if not self.checkkeyword(BasKeyword.PLUS):
@@ -197,9 +326,28 @@ class Bas2C:
             else:
                 map = {BasKeyword.PLUS: '+', BasKeyword.MINUS: '-'}
                 while p := checkops(self, map):
-                    a = self.expect(muldiv(self))
-                    r = BasToken.int(f'({r.value} {map[p.value]} {a.value})')
+                    a = self.expect(mod(self))
+                    rty = self.expect(r.resulttype(a))
+                    r = BasToken(rty, f'({r.value} {map[p.value]} {a.value})')
                 return r
+
+        def mod(self):
+            if not (r := yen(self)):
+                return None
+            while self.checkkeyword(BasKeyword.MOD):
+                a = self.expect(yen(self))
+                self.expect(r.resulttype(a))
+                r = BasToken.int(f'((int){r.value} % (int){a.value})')
+            return r
+
+        def yen(self):
+            if not (r := muldiv(self)):
+                return None
+            while self.checkkeyword(BasKeyword.YEN):
+                a = self.expect(muldiv(self))
+                self.expect(r.resulttype(a))
+                r = BasToken.int(f'((int){r.value} / (int){a.value})')
+            return r
 
         def muldiv(self):
             if not (r := posneg(self)):
@@ -207,21 +355,23 @@ class Bas2C:
             map = {BasKeyword.MUL: '*', BasKeyword.DIV: '/'}
             while p := checkops(self, map):
                 a = self.expect(posneg(self))
-                r = BasToken.int(f'({r.value} {map[p.value]} {a.value})')
+                rty = self.expect(r.resulttype(a))
+                r = BasToken(rty, f'({r.value} {map[p.value]} {a.value})')
             return r
 
         def posneg(self):
             map = {BasKeyword.PLUS: '+', BasKeyword.MINUS: '-'}
             if p := checkops(self, map):
                 r = self.expect(posneg(self))
-                return BasToken.int(map[p.value] + r.value)
+                rty = self.expect(r.resulttype())
+                return BasToken(rty, map[p.value] + r.value)
             return paren(self)
 
         def paren(self):
             if self.checksymbol('('):
                 r = self.expect(self.expr())
                 self.nextsymbol(')')
-                return BasToken.int(f'({r.value})')
+                return BasToken(r.type, f'({r.value})')
             return atom(self)
 
         def atom(self):
@@ -230,7 +380,7 @@ class Bas2C:
                 return r
             return None
 
-        return addsub(self)
+        return opxor(self)
 
 
 if __name__ == '__main__':
