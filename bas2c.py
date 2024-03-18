@@ -107,9 +107,19 @@ class BasTokenGen:
         # 文字 'x'
         elif m := ismatch(r'\'[^\']?\''):
             return BasToken.int(m.group(0))
+        # 16進数 &Hxxxx
+        elif m := ismatch(r'&[hH]([0-9a-fA-F]+)'):
+            return BasToken.int('0x' + m.group(1))  # 0xXXXX に変換
+        # 8進数 &Oxxxx
+        elif m := ismatch(r'&[oO]([0-7]+)'):
+            return BasToken.int('0' + m.group(1))   # 0XXXX に変換
+        # 2進数 &Bxxxx
+        elif m := ismatch(r'&[bB]([01]+)'):
+            return BasToken.int('0b' + m.group(1))  # 0XXXX に変換
         # 整数
         elif m := ismatch(r'(\d+)'):
-            return BasToken.int(m.group(0))
+            # 冒頭の0は8進数に解釈されてしまうので取り除く
+            return BasToken.int(re.sub(r'^0*(.)',r'\1',m.group(0)))
         # 変数名または予約語
         elif m := ismatch(r'[a-zA-Z_][a-zA-Z0-9_$]*'):
             return BasToken.variable(m.group(0))
@@ -149,6 +159,11 @@ class Bas2C:
         """次のトークンがシンボルsであることを確認する"""
         return self.expect(self.t.fetch().issymbol(s))
 
+    def checkkeyword(self, k):
+        """予約語kが出たら読み進む"""
+        if (x := self.t.fetch()).iskeyword(k):
+            return x
+        return self.t.unfetch(x)
     def checksymbol(self, s):
         """シンボルsが出たら読み進む"""
         if (x := self.t.fetch()).issymbol(s):
@@ -160,46 +175,58 @@ class Bas2C:
 
         def checkops(self, map):
             """次のトークンが予約語でmap内にあるなら読み進む"""
-            t = self.t.fetch()
-            if t.type == BasToken.KEYWORD and t.value in map:
+            t = self.expect(self.t.fetch())
+            if t.istype(BasToken.KEYWORD) and t.value in map:
                 return t
             return self.t.unfetch(t)
 
         def addsub(self):
             if not (r := muldiv(self)):
                 return None
-            map = {BasKeyword.PLUS: '+', BasKeyword.MINUS: '-'}
-            while p := checkops(self, map):
-                a = muldiv(self)
-                r = BasToken.int(f'({r.value} {map[p.value]} {a.value})')
-            return r
+            if r.istype(BasToken.STR):        # 文字列の連結
+                if not self.checkkeyword(BasKeyword.PLUS):
+                    return r
+                r = BasToken.str(f'b_stradd(strtmp,{r.value},')
+                while True:
+                    a = self.expect(muldiv(self))
+                    self.expect(a.istype(BasToken.STR))
+                    r = BasToken.str(f'{r.value}{a.value},')
+                    if not self.checkkeyword(BasKeyword.PLUS):
+                        break
+                return BasToken.str(f'{r.value}-1)')
+            else:
+                map = {BasKeyword.PLUS: '+', BasKeyword.MINUS: '-'}
+                while p := checkops(self, map):
+                    a = self.expect(muldiv(self))
+                    r = BasToken.int(f'({r.value} {map[p.value]} {a.value})')
+                return r
 
         def muldiv(self):
             if not (r := posneg(self)):
                 return None
             map = {BasKeyword.MUL: '*', BasKeyword.DIV: '/'}
             while p := checkops(self, map):
-                a = posneg(self)
+                a = self.expect(posneg(self))
                 r = BasToken.int(f'({r.value} {map[p.value]} {a.value})')
             return r
 
         def posneg(self):
             map = {BasKeyword.PLUS: '+', BasKeyword.MINUS: '-'}
             if p := checkops(self, map):
-                r = posneg(self)
+                r = self.expect(posneg(self))
                 return BasToken.int(map[p.value] + r.value)
             return paren(self)
 
         def paren(self):
             if self.checksymbol('('):
-                r = self.expr()
+                r = self.expect(self.expr())
                 self.nextsymbol(')')
                 return BasToken.int(f'({r.value})')
             return atom(self)
 
         def atom(self):
             r = self.t.fetch()
-            if r.type == BasToken.INT:
+            if r.isconst():                             # 定数
                 return r
             return None
 
