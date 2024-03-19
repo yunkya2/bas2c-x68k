@@ -130,6 +130,7 @@ class BasVariable:
     def __init__(self, name, type, arg='', init=''):
         self.name = name
         self.type = type
+        self.arg = arg
 
     def typename(self, fnres=False):
         map = { self.INT:   'int', \
@@ -140,10 +141,10 @@ class BasVariable:
 
     def definition(self, globl=False):
         r = 'static ' if globl else ''
-        return r + f'{self.typename()} {self.name};\n'
+        return r + f'{self.typename()} {self.name}{self.arg};\n'
 
     def __repr__(self):
-        return f'({self.typename()},{self.name},{self.type})'
+        return f'({self.typename()},{self.name},{self.type},{self.arg})'
 
 class BasNameSpace:
     """グローバル/ローカル名前空間を保持するクラス"""
@@ -158,12 +159,12 @@ class BasNameSpace:
         """名前がグローバルorローカル名前空間に定義されているかを調べる"""
         return self.glist.get(name, None)
 
-    def new(self, name, type):
+    def new(self, name, type, arg=''):
         """変数を名前空間に定義する"""
         if self.bpass == 1:                 # 変数定義を行うのはpass1のみ
             if self.glist.get(name, None):
                 raise Exception('変数の多重定義')
-            self.glist[name] = BasVariable(name, type)
+            self.glist[name] = BasVariable(name, type, arg)
         return self.glist[name]
 
     def definition(self):
@@ -454,6 +455,10 @@ class Bas2C:
         if self.checkkeyword(BasKeyword.EOF):
             return None
 
+        # 変数定義 (int/char/float/str)
+        if s := self.checkvartype():
+            return self.defvar(s.value)
+
         elif s := self.checktype(BasToken.KEYWORD):
             if s.value == BasKeyword.EOL:
                 return ''
@@ -578,12 +583,23 @@ class Bas2C:
             elif s.value == BasKeyword.END:
                 return 'return;\n'
 
+            else:
+                raise Exception('構文エラー')
+
+        elif s := self.lvalue():
+            self.nextkeyword(BasKeyword.EQ)
+            x = self.expect(self.expr()).value              # 代入する値を得る
+            if s.istype(BasToken.STR):                      # 文字列ならb_strncpy()
+                return f'b_strncpy(sizeof({s.value}),{s.value},{x});\n'
+            else:                                           # 単純変数への代入
+                return f'{s.value} = {x};\n'
+
         else:
             return None
 
-    def lvalue(self):
+    def lvalue(self, var=None):
         """左辺値(代入可能な変数)を得る"""
-        var = self.expect(self.t.fetch())
+        var = self.expect(self.t.fetch() if not var else var)
         if not var.istype(BasToken.VARIABLE):
             return None
         v = self.g.find(var.value)
@@ -592,6 +608,27 @@ class Bas2C:
             self.g.new(var.value, BasVariable.INT)
             v = self.g.find(var.value)
         return BasToken(v.type, f'{v.name}')
+
+    def defvar(self, ty):
+        """変数の定義"""
+        r = ''
+        while True:
+            # 変数名を取得する
+            var = self.nexttype(BasToken.VARIABLE)
+            # str変数のサイズを取得する
+            s = ''
+            if ty == BasVariable.STR:   # 文字列型の場合はバッファサイズを得る
+                if self.checksymbol('['):
+                    s += '[' + self.expect(self.expr()).value + '+1]'
+                    self.nextsymbol(']')
+                else:
+                    s += '[32+1]'       # デフォルトのバッファサイズ
+            # 変数を登録する
+            v = self.g.new(var, ty, s)
+            # 複数の変数をまとめて定義するなら繰り返す
+            if not self.checksymbol(','):
+                break
+        return r
 
     def expr(self):
         """"式を解析、変換してトークンで返す"""
@@ -734,8 +771,9 @@ class Bas2C:
             r = self.t.fetch()
             if r.isconst():                             # 定数
                 return r
-            elif r.istype(BasToken.VARIABLE):
-                return BasToken.int(r.value)
+            elif v := self.lvalue(r):
+                return v
+            self.t.unfetch(r)                           # 該当なしなのでトークンを戻す
             return None
 
         return opxor(self)
