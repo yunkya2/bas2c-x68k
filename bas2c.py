@@ -24,9 +24,13 @@ class BasKeyword:
     OR          = 1017
     XOR         = 1018
 
+    PRINT       = 2001
+
     EOL         = 9999
 
     keyword = {
+        'print'     : PRINT,
+
         'mod'       : MOD,
         'shr'       : SHR,
         'shl'       : SHL,
@@ -226,6 +230,11 @@ class Bas2C:
         """次のトークンがシンボルsであることを確認する"""
         return self.expect(self.t.fetch().issymbol(s))
 
+    def checktype(self, t):
+        """型tが出たら読み進む"""
+        if (x := self.t.fetch()).istype(t):
+            return x
+        return self.t.unfetch(x)
     def checkkeyword(self, k):
         """予約語kが出たら読み進む"""
         if (x := self.t.fetch()).iskeyword(k):
@@ -236,6 +245,43 @@ class Bas2C:
         if (x := self.t.fetch()).issymbol(s):
             return x
         return self.t.unfetch(x)
+
+    def statement(self):
+        """X-BASICの文を1つ読み込んで変換する"""
+        while self.checksymbol(':'):
+            pass
+        if self.checkkeyword(BasKeyword.EOF):
+            return None
+
+        elif s := self.checktype(BasToken.KEYWORD):
+            if s.value == BasKeyword.EOL:
+                return ''
+
+            elif s.value == BasKeyword.PRINT:
+                r = ''
+                crlf = True
+                while True:
+                    if x := self.expr():
+                        if x.istype(BasToken.STR):
+                            r += f'b_sprint({x.value});\n'
+                        elif x.istype(BasToken.FLOAT):
+                            r += f'b_fprint({x.value});\n'
+                        else:
+                            r += f'b_iprint({x.value});\n'
+                        crlf = True
+                    if self.checksymbol(';'):
+                        crlf = False
+                    elif self.checksymbol(','):
+                        r += f'b_sprint(STRTAB);\n'
+                        crlf = False
+                    else:
+                        break
+                if crlf:
+                    r += f'b_sprint(STRCRLF);\n'
+                return r
+
+        else:
+            return None
 
     def expr(self):
         """"式を解析、変換してトークンで返す"""
@@ -378,13 +424,30 @@ class Bas2C:
             r = self.t.fetch()
             if r.isconst():                             # 定数
                 return r
+            elif r.istype(BasToken.VARIABLE):
+                return BasToken.int(r.value)
             return None
 
         return opxor(self)
 
+##############################################################################
+
+    def start(self):
+        while True:
+            s = self.statement()
+            if s == None:
+                break
+            if s:
+                print(s, end='')
+
+##############################################################################
 
 if __name__ == '__main__':
-    # 入力式を解析する
-    b = Bas2C(sys.stdin)
-    while True:
-        print(b.expr())
+    if len(sys.argv) < 2:
+        fh = sys.stdin
+    else:
+        fh = open(sys.argv[1], 'r', encoding='cp932')
+    b = Bas2C(fh)
+    b.start()
+
+    sys.exit(0)
