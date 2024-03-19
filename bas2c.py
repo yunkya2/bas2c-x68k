@@ -53,6 +53,11 @@ class BasKeyword:
     CASE        = 2021
     DEFAULT     = 2022
     ENDSWITCH   = 2023
+    INPUT       = 2024
+    LINPUT      = 2025
+    LPRINT      = 2026
+    USING       = 2027
+    TAB         = 2028
 
     EOL         = 9999
 
@@ -80,6 +85,11 @@ class BasKeyword:
         'case'      : CASE,
         'default'   : DEFAULT,
         'endswitch' : ENDSWITCH,
+        'input'     : INPUT,
+        'linput'    : LINPUT,
+        'lprint'    : LPRINT,
+        'using'     : USING,
+        'tab'       : TAB,
 
         'int'       : INT,
         'char'      : CHAR,
@@ -413,6 +423,8 @@ class BasTokenGen:
         self.cached.append(t)
         return None
 
+##############################################################################
+
 class Bas2C:
     def __init__(self, fh):
         self.fh = fh
@@ -525,28 +537,87 @@ class Bas2C:
                     ty = t.value
                 return self.defvar(ty)
 
-            elif s.value == BasKeyword.PRINT:
+            elif s.value == BasKeyword.PRINT or s.value == BasKeyword.LPRINT:
+                lp = '' if s.value == BasKeyword.PRINT else 'l'
                 r = ''
                 crlf = True
-                while True:
-                    if x := self.expr():
-                        if x.istype(BasToken.STR):
-                            r += f'b_sprint({x.value});\n'
-                        elif x.istype(BasToken.FLOAT):
-                            r += f'b_fprint({x.value});\n'
+                if self.checkkeyword(BasKeyword.USING):
+                    fmt = self.expect(self.expr())
+                    self.expect(fmt.istype(BasToken.STR))
+                    self.nextsymbol(';')
+                    r = f'b_s{lp}print(using(strtmp{self.strtmp},{fmt.value}'
+                    self.strtmp += 1
+                    while True:
+                        if x := self.expr():
+                            if x.istype(BasToken.STR):
+                                r += f',{x.value}'
+                            else:
+                                r += f',(double)({x.value})'
+                        if not self.checksymbol(','):
+                            break
+                    r += '));\n'
+                    crlf = not self.checksymbol(';')
+                else:
+                    while True:
+                        if x := self.expr():
+                            if x.istype(BasToken.STR):
+                                r += f'b_s{lp}print({x.value});\n'
+                            elif x.istype(BasToken.FLOAT):
+                                r += f'b_f{lp}print({x.value});\n'
+                            else:
+                                r += f'b_i{lp}print({x.value});\n'
+                            crlf = True
+                        elif self.checkkeyword(BasKeyword.TAB):
+                            self.nextsymbol('(')
+                            x = self.expect(self.expr())
+                            self.nextsymbol(')')
+                            r += f'b_t{lp}print({x.value});\n'
+                            crlf = True
+
+                        if self.checksymbol(';'):
+                            crlf = False
+                        elif self.checksymbol(','):
+                            r += f'b_s{lp}print(STRTAB);\n'
+                            crlf = False
                         else:
-                            r += f'b_iprint({x.value});\n'
-                        crlf = True
-                    if self.checksymbol(';'):
-                        crlf = False
-                    elif self.checksymbol(','):
-                        r += f'b_sprint(STRTAB);\n'
-                        crlf = False
-                    else:
-                        break
+                            break
                 if crlf:
-                    r += f'b_sprint(STRCRLF);\n'
+                    r += f'b_s{lp}print(STRCRLF);\n'
                 return r
+
+            elif s.value == BasKeyword.INPUT:
+                pstr = '"? "'
+                if p := self.checktype(BasToken.STR):
+                    pstr = p.value
+                    if self.checksymbol(';'):
+                        pstr += ' "? "'
+                    else:
+                        self.nextsymbol(',')
+                r = f'b_input({pstr:s}'
+
+                while True:
+                    a = self.expect(self.lvalue())
+                    if a.istype(BasToken.STR):
+                        at = f'sizeof({a.value})'
+                        av = a.value
+                    else:
+                        map = {BasToken.INT:0x204, BasToken.CHAR:0x201, BasToken.FLOAT:0x208}
+                        at = f'0x{map[a.type]:x}'
+                        av = '&'+a.value
+                    r += f',{at},{av}'
+                    if not self.checksymbol(','):
+                        break
+                r += ',-1);\n'
+                return r
+
+            elif s.value == BasKeyword.LINPUT:
+                r = ''
+                if p := self.checktype(BasToken.STR):
+                    self.nextsymbol(';')
+                    r += f'b_sprint({p.value});\n'
+                a = self.expect(self.lvalue())
+                self.expect(a.istype(BasToken.STR))
+                return r + f'b_linput({a.value},sizeof({a.value}));\n'
 
             elif s.value == BasKeyword.IF:
                 r = ''
@@ -722,6 +793,8 @@ class Bas2C:
 
         else:
             return None
+
+##############################################################################
 
     def lvalue(self, var=None, arrayok=False):
         """左辺値(代入可能な変数/配列)を得る"""
