@@ -1286,7 +1286,12 @@ class Bas2C:
 ##############################################################################
 
 if __name__ == '__main__':
-    with open('bas2c.def') as f:
+    import os
+    if hasattr(os,'path'):
+        sdir = os.path.dirname(os.path.abspath(__file__))
+    else:
+        sdir = '.'
+    with open(sdir + '/bas2c.def') as f:
         BasKeyword.exfninit(f)
 
     if len(sys.argv) < 2:
