@@ -125,11 +125,17 @@ class BasKeyword:
         return None        
 
 class BasVariable:
-    """変数の型と名前を保持するクラス"""
+    """変数/関数の型と名前を保持するクラス"""
     INT         = BasKeyword.INT    # 1
     CHAR        = BasKeyword.CHAR   # 2
     FLOAT       = BasKeyword.FLOAT  # 3
     STR         = BasKeyword.STR    # 4
+
+    DIM         = 10
+    DIM_INT     = DIM + INT         # 11
+    DIM_CHAR    = DIM + CHAR        # 12
+    DIM_FLOAT   = DIM + FLOAT       # 13
+    DIM_STR     = DIM + STR         # 14
 
     def __init__(self, name, type, arg='', init='', func=False):
         self.name = name
@@ -145,7 +151,7 @@ class BasVariable:
                 self.STR:   'unsigned char' }
         if fnres and self.type == self.STR:
             return 'unsigned char *'        # strを返す関数の戻り値型
-        return map[self.type]
+        return map[self.type] if self.type in map else map[self.type - self.DIM]
 
     def definition(self, globl=False):
         if self.func:
@@ -508,6 +514,12 @@ class Bas2C:
             if s.value == BasKeyword.EOL:
                 return ''
 
+            elif s.value == BasKeyword.DIM:
+                ty = BasVariable.INT
+                if t := self.checkvartype():
+                    ty = t.value
+                return self.defvar(ty)
+
             elif s.value == BasKeyword.PRINT:
                 r = ''
                 crlf = True
@@ -689,7 +701,7 @@ class Bas2C:
 
         elif s := self.lvalue():
             self.nextkeyword(BasKeyword.EQ)
-            x = self.expect(self.expr()).value              # 代入する値を得る
+            x = self.initvar(s.type)                        # 代入する値を得る
             if s.istype(BasToken.STR):                      # 文字列ならb_strncpy()
                 return f'b_strncpy(sizeof({s.value}),{s.value},{x});\n'
             else:                                           # 単純変数への代入
@@ -711,13 +723,21 @@ class Bas2C:
         return BasToken(v.type, f'{v.name}')
 
     def defvar(self, ty):
-        """変数の定義"""
+        """変数/配列の定義"""
         r = ''
         while True:
             # 変数名を取得する
             var = self.nexttype(BasToken.VARIABLE)
-            # str変数のサイズを取得する
+            # 配列の最大要素番号、str変数のサイズを取得する
             s = ''
+            rty = ty
+            if self.checksymbol('('):   # ()が付いていたら配列 (dimがなくても)
+                rty = ty + BasVariable.DIM
+                while True:             # 配列の要素数を取得する
+                    s += '[(' + self.expect(self.expr()).value + ')+1]'
+                    if not self.checksymbol(','):
+                        break
+                self.nextsymbol(')')
             if ty == BasVariable.STR:   # 文字列型の場合はバッファサイズを得る
                 if self.checksymbol('['):
                     s += '[' + self.expect(self.expr()).value + '+1]'
@@ -725,9 +745,9 @@ class Bas2C:
                 else:
                     s += '[32+1]'       # デフォルトのバッファサイズ
             # 初期値が指定されていたら取得する
-            x = self.expect(self.expr()).value if self.checkkeyword(BasKeyword.EQ) else ''
+            x = self.initvar(rty) if self.checkkeyword(BasKeyword.EQ) else ''
             # 変数を登録する
-            v = self.g.new(var, ty, s, x)
+            v = self.g.new(var, rty, s, x)
             # ローカル変数であればその場に定義を出力する(グローバル変数はパス2冒頭でまとめて出力)
             if self.g.llist != None:
                 r += v.definition()
@@ -735,6 +755,31 @@ class Bas2C:
             if not self.checksymbol(','):
                 break
         return r
+
+    def initvar(self, ty):
+        """変数/配列の初期値を得る"""
+        if ty >= BasVariable.DIM:
+            self.nextsymbol('{')            # 配列の場合
+            n = '{'
+            nest = 1
+            while nest > 0:
+                if self.checksymbol('{'):
+                    n += '{'
+                    nest += 1
+                elif self.checksymbol('}'):
+                    n += '}'
+                    nest -= 1
+                elif a := self.checktype(BasToken.SYMBOL):
+                    n += a.value
+                elif a := self.checkkeyword(BasKeyword.EOL):
+                    n += '\n'
+                else:
+                    n += self.expect(self.expr()).value
+                    self.checksymbol(',')
+                    n += ','
+            return n
+        else:
+            return self.expect(self.expr()).value
 
     def expr(self):
         """"式を解析、変換してトークンで返す"""
