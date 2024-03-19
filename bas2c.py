@@ -319,6 +319,8 @@ class BasTokenGen:
         else:
             self.fp = 0
         self.line = ''
+        self.preline = ''
+        self.curline = ''
         self.lineno = 0
         self.baslineno = 0
         self.cached = []
@@ -337,6 +339,8 @@ class BasTokenGen:
                     else:
                         self.line = self.filebuf[self.fp:n + 1]
                         self.fp = n + 1
+            self.preline = self.line
+            self.curline = self.line
             self.lineno += 1
             self.baslineno = 0
             # 行番号があれば取得する
@@ -418,6 +422,7 @@ class BasTokenGen:
 
     def fetch(self):
         """トークンを取得する (先読みされていたものがあればそれを返す)"""
+        self.preline = self.line
         if self.cached:
             return self.cached.pop()
         return self.get()
@@ -1082,8 +1087,11 @@ class Bas2C:
     def start(self):
         self.setpass(1)     # pass 1
         while True:
-            if self.statement() == None:
-                break
+            try:
+                if self.statement() == None:
+                    break
+            except Exception as e:
+                pass                    # 1パス目のエラーは無視
 
         self.setpass(2)     # pass 2
         print(self.gendefine(), end='')
@@ -1091,7 +1099,14 @@ class Bas2C:
             print(f'static unsigned char strtmp{_}[258];')
         print('void main(int b_argc, char *b_argv[])\n{')
         while True:
-            s = self.statement()
+            try:
+                s = self.statement()
+            except Exception as e:
+                print(f'Error: {e} in line {self.t.lineno}({self.t.baslineno})')
+                print(self.t.curline,end='')
+                pos = len(self.t.curline) - len(self.t.preline) 
+                print(' ' * pos + '^')
+                raise
             print(self.genlabel(), end='')
             if s == None:
                 break
