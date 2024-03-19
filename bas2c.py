@@ -41,16 +41,18 @@ class BasKeyword:
     ELSE        = 2009
     END         = 2010
     RETURN      = 2011
-    WHILE       = 2012
-    ENDWHILE    = 2013
-    REPEAT      = 2014
-    UNTIL       = 2015
-    BREAK       = 2016
-    CONTINUE    = 2017
-    SWITCH      = 2018
-    CASE        = 2019
-    DEFAULT     = 2020
-    ENDSWITCH   = 2021
+    FUNC        = 2012
+    ENDFUNC     = 2013
+    WHILE       = 2014
+    ENDWHILE    = 2015
+    REPEAT      = 2016
+    UNTIL       = 2017
+    BREAK       = 2018
+    CONTINUE    = 2019
+    SWITCH      = 2020
+    CASE        = 2021
+    DEFAULT     = 2022
+    ENDSWITCH   = 2023
 
     EOL         = 9999
 
@@ -66,6 +68,8 @@ class BasKeyword:
         'else'      : ELSE,
         'end'       : END,
         'return'    : RETURN,
+        'func'      : FUNC,
+        'endfunc'   : ENDFUNC,
         'while'     : WHILE,
         'endwhile'  : ENDWHILE,
         'repeat'    : REPEAT,
@@ -127,45 +131,71 @@ class BasVariable:
     FLOAT       = BasKeyword.FLOAT  # 3
     STR         = BasKeyword.STR    # 4
 
-    def __init__(self, name, type, arg='', init=''):
+    def __init__(self, name, type, arg='', init='', func=False):
         self.name = name
         self.type = type
         self.arg = arg
+        self.init = init
+        self.func = func
 
     def typename(self, fnres=False):
         map = { self.INT:   'int', \
                 self.CHAR:  'unsigned char', \
                 self.FLOAT: 'double', \
                 self.STR:   'unsigned char' }
+        if fnres and self.type == self.STR:
+            return 'unsigned char *'        # strを返す関数の戻り値型
         return map[self.type]
 
     def definition(self, globl=False):
-        r = 'static ' if globl else ''
-        return r + f'{self.typename()} {self.name}{self.arg};\n'
+        if self.func:
+            return f'{self.typename()} {self.name}({self.arg});\n'
+        else:
+            r = 'static ' if globl else ''
+            r += f'{self.typename()} {self.name}{self.arg}'
+            if self.init:
+                r += f' = {self.init}'
+            return r + ';\n'
 
     def __repr__(self):
-        return f'({self.typename()},{self.name},{self.type},{self.arg})'
+        return f'({self.typename()},{self.name},{self.type},{self.arg},{self.init},{self.func})'
 
 class BasNameSpace:
     """グローバル/ローカル名前空間を保持するクラス"""
     def __init__(self):
         self.glist = {}
+        self.llist = None
         self.bpass = 0
+
+    def setlocal(self, enable):
+        """ローカル名前空間を有効にする/無効にする"""
+        self.llist = {} if enable else None
 
     def setpass(self, bpass):
         self.bpass = bpass
 
-    def find(self, name):
+    def find(self, name, lonly=False):
         """名前がグローバルorローカル名前空間に定義されているかを調べる"""
+        if self.llist != None:
+            if v := self.llist.get(name, None):
+                return v
+            if lonly:
+                return None
         return self.glist.get(name, None)
 
-    def new(self, name, type, arg=''):
+    def new(self, name, type, arg='', init='', func=False, forceglobl=False):
         """変数を名前空間に定義する"""
-        if self.bpass == 1:                 # 変数定義を行うのはpass1のみ
-            if self.glist.get(name, None):
+        if forceglobl or (self.llist == None):  # グローバル変数定義
+            if self.bpass == 1:                 # 変数定義を行うのはpass1のみ
+                if self.glist.get(name, None):
+                    raise Exception('変数の多重定義')
+                self.glist[name] = BasVariable(name, type, arg, init, func)
+            return self.glist[name]
+        else:                                   # ローカル変数定義
+            if self.llist.get(name, None):
                 raise Exception('変数の多重定義')
-            self.glist[name] = BasVariable(name, type, arg)
-        return self.glist[name]
+            self.llist[name] = BasVariable(name, type, arg, init, func)
+            return self.llist[name]
 
     def definition(self):
         """グローバル名前空間に定義されている変数の定義リストを出力する"""
@@ -183,6 +213,7 @@ class BasToken:
     STR      = BasKeyword.STR       # 4
     KEYWORD  = 5
     VARIABLE = 6
+    FUNCTION = 7
 
     def __init__(self, type, value):
         self.type = type
@@ -206,6 +237,9 @@ class BasToken:
     @classmethod
     def variable(cls, value):
         return cls(cls.VARIABLE, value)
+    @classmethod
+    def function(cls, value):
+        return cls(cls.FUNCTION, value)
 
     def isconst(self):
         """定数であればTrue"""
@@ -386,6 +420,7 @@ class Bas2C:
         self.mainend = False
         self.updatestrtmp()
         self.g.setpass(bpass)
+        self.g.setlocal(False)
         self.t.rewind()
 
     def expect(self, v):
@@ -580,8 +615,64 @@ class Bas2C:
                     self.subr.append(l)
                 return f'S{l:06d}();\n'
 
-            elif s.value == BasKeyword.RETURN:
+            elif s.value == BasKeyword.FUNC:
+                # 関数の戻り値型を取得する(指定されていなければint型とする)
+                fty = BasVariable.INT
+                if t := self.checkvartype():
+                    fty = t.value
+
+                # 関数名を取得する
+                func = self.nexttype(BasToken.VARIABLE)
+
+                # ローカル変数を初期化する
+                self.g.setlocal(True)
+
+                # 引数を取得する
+                self.nextsymbol('(')
+                if self.checksymbol(')'):
+                    arg = 'void'
+                else:
+                    arg = ''
+                    while True:
+                        # 引数名を取得する
+                        var = self.nexttype(BasToken.VARIABLE)
+                        # 引数の型を取得する(指定されていなければint型とする)
+                        vty = BasVariable.INT
+                        if self.checksymbol(';'):
+                            vty = self.expect(self.checkvartype()).value
+                        # 引数をローカル変数として登録する
+                        va = '[32+1]' if vty == BasVariable.STR else ''
+                        v = self.g.new(var, vty, va)
+                        arg += f'{v.typename()} {var}{va}'
+                        # もう引数がないならループを抜ける
+                        if not self.checksymbol(','):
+                            break
+                        arg += ','
+                    self.nextsymbol(')')
+
+                # 関数名はグローバルで登録する
+                v = self.g.new(func, fty, arg, func=True, forceglobl=True)
+
+                r = ''
+                if not self.mainend:
+                    r = '}\n'
+                    self.mainend = True
+                return r + f'\n{v.typename(True)} {func}({arg})\n' + '{\n'
+
+            elif s.value == BasKeyword.ENDFUNC:
+                self.g.setlocal(False)
                 return '}\n'
+
+            elif s.value == BasKeyword.RETURN:
+                if self.checksymbol('('):
+                    r = self.expr()
+                    self.nextsymbol(')')
+                    if r:
+                        return f'return {r.value};\n'
+                    else:
+                        return 'return 0;\n'
+                else:
+                    return '}\n'
 
             elif s.value == BasKeyword.BREAK:
                 self.checksymbol(';')
@@ -633,8 +724,13 @@ class Bas2C:
                     self.nextsymbol(']')
                 else:
                     s += '[32+1]'       # デフォルトのバッファサイズ
+            # 初期値が指定されていたら取得する
+            x = self.expect(self.expr()).value if self.checkkeyword(BasKeyword.EQ) else ''
             # 変数を登録する
-            v = self.g.new(var, ty, s)
+            v = self.g.new(var, ty, s, x)
+            # ローカル変数であればその場に定義を出力する(グローバル変数はパス2冒頭でまとめて出力)
+            if self.g.llist != None:
+                r += v.definition()
             # 複数の変数をまとめて定義するなら繰り返す
             if not self.checksymbol(','):
                 break
