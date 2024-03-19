@@ -376,12 +376,15 @@ class Bas2C:
         self.label = []
         self.subr = []
         self.g = BasNameSpace()
+        self.strtmp = 0
+        self.strtmp_max = 0
         self.setpass(0)
 
     def setpass(self, bpass):
         """変換パスを設定する"""
         self.bpass = bpass
         self.mainend = False
+        self.updatestrtmp()
         self.g.setpass(bpass)
         self.t.rewind()
 
@@ -448,12 +451,19 @@ class Bas2C:
                 return r + f'void S{l:06d}(void)\n' + '{\n'
         return ''
 
+    def updatestrtmp(self):
+        """文字列処理用一時変数の最大数を更新する"""
+        self.strtmp_max = max(self.strtmp, self.strtmp_max)
+        self.strtmp = 0
+
     def statement(self):
         """X-BASICの文を1つ読み込んで変換する"""
         while self.checksymbol(':'):
             pass
         if self.checkkeyword(BasKeyword.EOF):
             return None
+
+        self.updatestrtmp()
 
         # 変数定義 (int/char/float/str)
         if s := self.checkvartype():
@@ -708,7 +718,8 @@ class Bas2C:
             if r.istype(BasToken.STR):        # 文字列の連結
                 if not self.checkkeyword(BasKeyword.PLUS):
                     return r
-                r = BasToken.str(f'b_stradd(strtmp,{r.value},')
+                r = BasToken.str(f'b_stradd(strtmp{self.strtmp},{r.value},')
+                self.strtmp += 1
                 while True:
                     a = self.expect(mod(self))
                     self.expect(a.istype(BasToken.STR))
@@ -788,6 +799,8 @@ class Bas2C:
 
         self.setpass(2)     # pass 2
         print(self.gendefine(), end='')
+        for _ in range(self.strtmp_max):
+            print(f'static unsigned char strtmp{_}[258];')
         print('void main(int b_argc, char *b_argv[])\n{')
         while True:
             s = self.statement()
