@@ -28,19 +28,23 @@ class BasKeyword:
     FOR         = 2002
     TO          = 2003
     NEXT        = 2004
-    IF          = 2005
-    THEN        = 2006
-    ELSE        = 2007
-    WHILE       = 2008
-    ENDWHILE    = 2009
-    REPEAT      = 2010
-    UNTIL       = 2011
-    BREAK       = 2012
-    CONTINUE    = 2013
-    SWITCH      = 2014
-    CASE        = 2015
-    DEFAULT     = 2016
-    ENDSWITCH   = 2017
+    GOTO        = 2005
+    GOSUB       = 2006
+    IF          = 2007
+    THEN        = 2008
+    ELSE        = 2009
+    END         = 2010
+    RETURN      = 2011
+    WHILE       = 2012
+    ENDWHILE    = 2013
+    REPEAT      = 2014
+    UNTIL       = 2015
+    BREAK       = 2016
+    CONTINUE    = 2017
+    SWITCH      = 2018
+    CASE        = 2019
+    DEFAULT     = 2020
+    ENDSWITCH   = 2021
 
     EOL         = 9999
 
@@ -49,9 +53,13 @@ class BasKeyword:
         'for'       : FOR,
         'to'        : TO,
         'next'      : NEXT,
+        'goto'      : GOTO,
+        'gosub'     : GOSUB,
         'if'        : IF,
         'then'      : THEN,
         'else'      : ELSE,
+        'end'       : END,
+        'return'    : RETURN,
         'while'     : WHILE,
         'endwhile'  : ENDWHILE,
         'repeat'    : REPEAT,
@@ -161,17 +169,58 @@ class BasToken:
 class BasTokenGen:
     """ソースコードからトークンを生成するクラス"""
     def __init__(self, fh=sys.stdin):
-        self.fh = fh
+        if fh == sys.stdin:
+            # 標準入力は巻き戻せないので一度すべてを読み込む
+            self.filebuf = ''
+            while l := fh.readline():
+                if l[0] == '\x1a':
+                    break
+                self.filebuf += l
+            self.fh = None
+        else:
+            self.fh = fh
+        self.rewind()
+
+    def rewind(self):
+        """ファイルを巻き戻す"""
+        if self.fh:
+            self.fh.seek(0)
+        else:
+            self.fp = 0
         self.line = ''
+        self.lineno = 0
+        self.baslineno = 0
         self.cached = []
 
     def getline(self):
         """必要があれば1行読み込む"""
         if len(self.line) == 0:
-            self.line = self.fh.readline()
+            if self.fh:
+                self.line = self.fh.readline()
+            else:
+                if self.fp < len(self.filebuf):
+                    n = self.filebuf.find('\n', self.fp)
+                    if n < 0:
+                        self.line = self.filebuf[self.fp:]
+                        self.fp = len(self.filebuf)
+                    else:
+                        self.line = self.filebuf[self.fp:n + 1]
+                        self.fp = n + 1
+            self.lineno += 1
+            self.baslineno = 0
+            # 行番号があれば取得する
+            if m := re.match(r'[ \t]*(\d+)', self.line):
+                self.baslineno = int(m.group(1))
+                self.line = self.line[m.end():]
         # 行頭の空白などは読み飛ばす
         self.line = self.line.lstrip(' \t\r\x1a')
         return self.line
+
+    def getbaslineno(self):
+        """BASICの行番号を取得する"""
+        r = self.baslineno
+        self.baslineno = 0      # 取得できるのは一度だけ
+        return r
 
     def get(self):
         """トークンを取得する"""
@@ -251,6 +300,15 @@ class Bas2C:
     def __init__(self, fh):
         self.fh = fh
         self.t = BasTokenGen(fh)
+        self.label = []
+        self.subr = []
+        self.setpass(0)
+
+    def setpass(self, bpass):
+        """変換パスを設定する"""
+        self.bpass = bpass
+        self.mainend = False
+        self.t.rewind()
 
     def expect(self, v):
         """実行結果がNoneでないことを確認する"""
@@ -289,6 +347,26 @@ class Bas2C:
         if (x := self.t.fetch()).issymbol(s):
             return x
         return self.t.unfetch(x)
+
+    def gendefine(self):
+        """関数定義を出力する"""
+        r = ''
+        for l in self.subr:         # サブルーチンのプロトタイプを出力する
+            r += f'void S{l:05d}(void);\n'
+        return r
+
+    def genlabel(self):
+        """必要ならGOTO飛び先のラベル定義、GOSUB飛び先の関数定義を出力する"""
+        if l := self.t.getbaslineno():
+            if l in self.label:
+                return f'L{l:06d}:\n'
+            elif l in self.subr:
+                r = ''
+                if not self.mainend:
+                    r = '}\n'
+                    self.mainend = True
+                return r + f'void S{l:06d}(void)\n' + '{\n'
+        return ''
 
     def statement(self):
         """X-BASICの文を1つ読み込んで変換する"""
@@ -396,12 +474,30 @@ class Bas2C:
             elif s.value == BasKeyword.ENDSWITCH:
                 return '}\n'
 
+            elif s.value == BasKeyword.GOTO:
+                l = int(self.nexttype(BasToken.INT))
+                if self.bpass == 1:
+                    self.label.append(l)
+                return f'goto L{l:06d};\n'
+
+            elif s.value == BasKeyword.GOSUB:
+                l = int(self.nexttype(BasToken.INT))
+                if self.bpass == 1:
+                    self.subr.append(l)
+                return f'S{l:06d}();\n'
+
+            elif s.value == BasKeyword.RETURN:
+                return '}\n'
+
             elif s.value == BasKeyword.BREAK:
                 self.checksymbol(';')
                 return 'break;\n'
 
             elif s.value == BasKeyword.CONTINUE:
                 return 'continue;\n'
+
+            elif s.value == BasKeyword.END:
+                return 'return;\n'
 
         else:
             return None
@@ -556,12 +652,23 @@ class Bas2C:
 ##############################################################################
 
     def start(self):
+        self.setpass(1)     # pass 1
+        while True:
+            if self.statement() == None:
+                break
+
+        self.setpass(2)     # pass 2
+        print(self.gendefine(), end='')
+        print('void main(int b_argc, char *b_argv[])\n{')
         while True:
             s = self.statement()
+            print(self.genlabel(), end='')
             if s == None:
                 break
             if s:
                 print(s, end='')
+        if not self.mainend:
+            print('}')
 
 ##############################################################################
 
