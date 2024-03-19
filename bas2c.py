@@ -58,6 +58,8 @@ class BasKeyword:
     LPRINT      = 2026
     USING       = 2027
     TAB         = 2028
+    LOCATE      = 2029
+    ERROR       = 2030
 
     EOL         = 9999
 
@@ -90,6 +92,8 @@ class BasKeyword:
         'lprint'    : LPRINT,
         'using'     : USING,
         'tab'       : TAB,
+        'locate'    : LOCATE,
+        'error'     : ERROR,
 
         'int'       : INT,
         'char'      : CHAR,
@@ -768,6 +772,24 @@ class Bas2C:
 
             elif s.value == BasKeyword.CONTINUE:
                 return 'continue;\n'
+
+            elif s.value == BasKeyword.LOCATE:
+                r = ''
+                x = self.expr()
+                if x != None:
+                    self.nextsymbol(',')
+                    y = self.expect(self.expr())
+                    r = f'locate({x.value},{y.value});\n'
+                else:
+                    self.nextsymbol(',')
+                if self.checksymbol(','):
+                    a = self.expect(self.expr())
+                    r += f'b_csw({a.value});\n'
+                return r
+
+            elif s.value == BasKeyword.ERROR:
+                x = self.expect(self.t.fetch())     # error命令は読み飛ばして無視
+                return f'/* error {x.value} */\n'
 
             elif s.value == BasKeyword.END:
                 return 'return;\n'
