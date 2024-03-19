@@ -25,11 +25,17 @@ class BasKeyword:
     XOR         = 1018
 
     PRINT       = 2001
+    FOR         = 2002
+    TO          = 2003
+    NEXT        = 2004
 
     EOL         = 9999
 
     keyword = {
         'print'     : PRINT,
+        'for'       : FOR,
+        'to'        : TO,
+        'next'      : NEXT,
 
         'mod'       : MOD,
         'shr'       : SHR,
@@ -226,6 +232,12 @@ class Bas2C:
             raise Exception('構文エラー')
         return v
 
+    def nexttype(self, t):
+        """次のトークンが型tであることを確認して値を返す"""
+        return self.expect(self.t.fetch().istype(t))
+    def nextkeyword(self, k):
+        """次のトークンが予約語kであることを確認する"""
+        return self.expect(self.t.fetch().iskeyword(k))
     def nextsymbol(self, s):
         """次のトークンがシンボルsであることを確認する"""
         return self.expect(self.t.fetch().issymbol(s))
@@ -279,6 +291,17 @@ class Bas2C:
                 if crlf:
                     r += f'b_sprint(STRCRLF);\n'
                 return r
+
+            elif s.value == BasKeyword.FOR:
+                v = self.expect(self.nexttype(BasToken.VARIABLE))
+                self.nextkeyword(BasKeyword.EQ)
+                f = self.expect(self.expr())
+                self.nextkeyword(BasKeyword.TO)
+                t = self.expect(self.expr())
+                return f'for ({v} = {f.value}; {v} <= {t.value}; {v}++) ' + '{\n'
+
+            elif s.value == BasKeyword.NEXT:
+                return '}\n'
 
         else:
             return None
