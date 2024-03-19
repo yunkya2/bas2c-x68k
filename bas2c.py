@@ -144,6 +144,10 @@ class BasVariable:
         self.init = init
         self.func = func
 
+    def isarray(self):
+        """配列であればTrue"""
+        return self.type >= self.DIM
+
     def typename(self, fnres=False):
         map = { self.INT:   'int', \
                 self.CHAR:  'unsigned char', \
@@ -427,6 +431,7 @@ class Bas2C:
         self.updatestrtmp()
         self.g.setpass(bpass)
         self.g.setlocal(False)
+        self.initmp = 0
         self.t.rewind()
 
     def expect(self, v):
@@ -699,9 +704,17 @@ class Bas2C:
             else:
                 raise Exception('構文エラー')
 
-        elif s := self.lvalue():
+        elif s := self.lvalue(None, True):                  # 左辺値 or 関数名の場合
+            if s.istype(BasToken.FUNCTION):
+                return self.fncall(s.value).value + ';\n'   # 関数呼び出し
             self.nextkeyword(BasKeyword.EQ)
             x = self.initvar(s.type)                        # 代入する値を得る
+            if s.type >= BasVariable.DIM:                   # 配列なら一時変数の内容をコピー
+                v = self.g.find(s.value)
+                r = f'static const {v.typename()} _initmp{self.initmp:04d}{v.arg} = {x};\n'
+                r += f'memcpy({s.value}, _initmp{self.initmp:04d}, sizeof({s.value}));\n'
+                self.initmp += 1
+                return r
             if s.istype(BasToken.STR):                      # 文字列ならb_strncpy()
                 return f'b_strncpy(sizeof({s.value}),{s.value},{x});\n'
             else:                                           # 単純変数への代入
@@ -710,17 +723,37 @@ class Bas2C:
         else:
             return None
 
-    def lvalue(self, var=None):
-        """左辺値(代入可能な変数)を得る"""
+    def lvalue(self, var=None, arrayok=False):
+        """左辺値(代入可能な変数/配列)を得る"""
         var = self.expect(self.t.fetch() if not var else var)
         if not var.istype(BasToken.VARIABLE):
             return None
         v = self.g.find(var.value)
-        if not v:
-            # 未定義変数への代入時はint型のグローバル変数として定義する
-            self.g.new(var.value, BasVariable.INT)
-            v = self.g.find(var.value)
-        return BasToken(v.type, f'{v.name}')
+        if self.peek().issymbol('('):               # 配列または関数呼び出し
+            if (not v) or (not v.isarray()):
+                return BasToken.function(var.value) # 関数呼び出し
+        else:                                       # 単純変数
+            if not v:
+                # 未定義変数への代入時はint型のグローバル変数として定義する
+                self.g.new(var.value, BasVariable.INT, forceglobl=True)
+                v = self.g.find(var.value)
+        ty = v.type
+        sub = ''
+        if v.isarray():
+            if self.checksymbol('('):
+                sub = '['
+                while True:
+                    if a := self.expr():
+                        sub += a.value
+                    if not self.checksymbol(','):
+                        break
+                    sub += ']['
+                self.nextsymbol(')')
+                sub += ']'
+                ty -= BasVariable.DIM
+        if ty >= BasVariable.DIM and not arrayok:
+            return None         # 配列全体は返せない
+        return BasToken(ty, f'{v.name}{sub}')
 
     def defvar(self, ty):
         """変数/配列の定義"""
@@ -780,6 +813,23 @@ class Bas2C:
             return n
         else:
             return self.expect(self.expr()).value
+
+    def fncall(self, fn):
+        """関数呼び出しを生成する"""
+        v = self.g.find(fn)                 # 関数が定義済みか調べる
+        self.expect(v or (self.bpass == 1)) # (パス1なら未定義でもよい)
+        arg = ''                            # 引数を得る
+        self.nextsymbol('(')
+        while True:
+            if a := self.expr():            # TBD 型チェック
+                arg += a.value
+            if not self.checksymbol(','):
+                break
+            arg += ', '
+        self.nextsymbol(')')
+        if not v:
+            return BasToken.function(fn)    # 未定義関数だったらFUNCTION型を返す
+        return BasToken(v.type, f'{fn}({arg})')
 
     def expr(self):
         """"式を解析、変換してトークンで返す"""
@@ -923,7 +973,9 @@ class Bas2C:
             r = self.t.fetch()
             if r.isconst():                             # 定数
                 return r
-            elif v := self.lvalue(r):
+            elif v := self.lvalue(r):                   # 左辺値 or 関数名
+                if v.istype(BasToken.FUNCTION):
+                    return self.fncall(v.value)         # 関数呼び出し
                 return v
             self.t.unfetch(r)                           # 該当なしなのでトークンを戻す
             return None
