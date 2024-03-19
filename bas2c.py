@@ -28,16 +28,19 @@ class BasKeyword:
     FOR         = 2002
     TO          = 2003
     NEXT        = 2004
-    WHILE       = 2005
-    ENDWHILE    = 2006
-    REPEAT      = 2007
-    UNTIL       = 2008
-    BREAK       = 2009
-    CONTINUE    = 2010
-    SWITCH      = 2011
-    CASE        = 2012
-    DEFAULT     = 2013
-    ENDSWITCH   = 2014
+    IF          = 2005
+    THEN        = 2006
+    ELSE        = 2007
+    WHILE       = 2008
+    ENDWHILE    = 2009
+    REPEAT      = 2010
+    UNTIL       = 2011
+    BREAK       = 2012
+    CONTINUE    = 2013
+    SWITCH      = 2014
+    CASE        = 2015
+    DEFAULT     = 2016
+    ENDSWITCH   = 2017
 
     EOL         = 9999
 
@@ -46,6 +49,9 @@ class BasKeyword:
         'for'       : FOR,
         'to'        : TO,
         'next'      : NEXT,
+        'if'        : IF,
+        'then'      : THEN,
+        'else'      : ELSE,
         'while'     : WHILE,
         'endwhile'  : ENDWHILE,
         'repeat'    : REPEAT,
@@ -262,6 +268,12 @@ class Bas2C:
         """次のトークンがシンボルsであることを確認する"""
         return self.expect(self.t.fetch().issymbol(s))
 
+    def peek(self):
+        """次のトークンを先読みする"""
+        t = self.expect(self.t.fetch())
+        self.t.unfetch(t)
+        return t
+
     def checktype(self, t):
         """型tが出たら読み進む"""
         if (x := self.t.fetch()).istype(t):
@@ -311,6 +323,39 @@ class Bas2C:
                 if crlf:
                     r += f'b_sprint(STRCRLF);\n'
                 return r
+
+            elif s.value == BasKeyword.IF:
+                r = ''
+                while True:
+                    x = self.expect(self.expr())
+                    self.nextkeyword(BasKeyword.THEN)
+                    r += f'if ({x.value}) ' + '{\n'
+                    # then節の命令取り込み
+                    if self.checksymbol('{'):           # { } で囲まれている場合
+                        while not self.checksymbol('}'):
+                            r += self.statement()
+                        if not self.checkkeyword(BasKeyword.ELSE):
+                            return r + '}\n'                        # elseなしで終わり
+                    else:                               # { } で囲まれていない場合
+                        while not self.checkkeyword(BasKeyword.ELSE):
+                            r += self.statement()
+                            if self.checkkeyword(BasKeyword.EOL):   # 行末が来たら
+                                return r + '}\n'                    # elseなしで終わり
+                            elif self.peek().issymbol('}'):
+                                return r + '}\n'                    # elseなしで終わり
+                    r += '} else '
+                    if not self.checkkeyword(BasKeyword.IF):
+                        r += '{\n'
+                        # else節の命令取り込み
+                        if self.checksymbol('{'):           # { } で囲まれている場合
+                            while not self.checksymbol('}'):
+                                r += self.statement()
+                        else:                               # { } で囲まれていない場合
+                            while not self.checkkeyword(BasKeyword.EOL):
+                                if self.peek().issymbol('}'):
+                                    break
+                                r += self.statement()
+                        return r + '}\n'
 
             elif s.value == BasKeyword.FOR:
                 v = self.expect(self.nexttype(BasToken.VARIABLE))
