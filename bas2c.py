@@ -5,6 +5,12 @@ import re
 class BasKeyword:
     EOF         = 0
 
+    INT         = 1
+    CHAR        = 2
+    FLOAT       = 3
+    STR         = 4
+    DIM         = 5
+
     PLUS        = 1001
     MINUS       = 1002
     MUL         = 1003
@@ -71,6 +77,12 @@ class BasKeyword:
         'default'   : DEFAULT,
         'endswitch' : ENDSWITCH,
 
+        'int'       : INT,
+        'char'      : CHAR,
+        'float'     : FLOAT,
+        'str'       : STR,
+        'dim'       : DIM,
+
         'mod'       : MOD,
         'shr'       : SHR,
         'shl'       : SHL,
@@ -79,8 +91,8 @@ class BasKeyword:
         'or'        : OR,
         'xor'       : XOR,
     }
-
     keywordop = {
+        '?'         : PRINT,
         '+'         : PLUS,
         '-'         : MINUS,
         '*'         : MUL,
@@ -108,14 +120,68 @@ class BasKeyword:
             return (w, word[1:])
         return None        
 
+class BasVariable:
+    """変数の型と名前を保持するクラス"""
+    INT         = BasKeyword.INT    # 1
+    CHAR        = BasKeyword.CHAR   # 2
+    FLOAT       = BasKeyword.FLOAT  # 3
+    STR         = BasKeyword.STR    # 4
+
+    def __init__(self, name, type, arg='', init=''):
+        self.name = name
+        self.type = type
+
+    def typename(self, fnres=False):
+        map = { self.INT:   'int', \
+                self.CHAR:  'unsigned char', \
+                self.FLOAT: 'double', \
+                self.STR:   'unsigned char' }
+        return map[self.type]
+
+    def definition(self, globl=False):
+        r = 'static ' if globl else ''
+        return r + f'{self.typename()} {self.name};\n'
+
+    def __repr__(self):
+        return f'({self.typename()},{self.name},{self.type})'
+
+class BasNameSpace:
+    """グローバル/ローカル名前空間を保持するクラス"""
+    def __init__(self):
+        self.glist = {}
+        self.bpass = 0
+
+    def setpass(self, bpass):
+        self.bpass = bpass
+
+    def find(self, name):
+        """名前がグローバルorローカル名前空間に定義されているかを調べる"""
+        return self.glist.get(name, None)
+
+    def new(self, name, type):
+        """変数を名前空間に定義する"""
+        if self.bpass == 1:                 # 変数定義を行うのはpass1のみ
+            if self.glist.get(name, None):
+                raise Exception('変数の多重定義')
+            self.glist[name] = BasVariable(name, type)
+        return self.glist[name]
+
+    def definition(self):
+        """グローバル名前空間に定義されている変数の定義リストを出力する"""
+        r = ''
+        for k in self.glist:
+            r += self.glist[k].definition(True)
+        return r
+
 class BasToken:
     """X-BASICのトークン"""
     SYMBOL   = 0
-    INT      = 1
-    FLOAT    = 2
-    STR      = 3
-    KEYWORD  = 4
-    VARIABLE = 5
+    INT      = BasKeyword.INT       # 1
+    CHAR     = BasKeyword.CHAR      # 2
+    FLOAT    = BasKeyword.FLOAT     # 3
+    STR      = BasKeyword.STR       # 4
+    KEYWORD  = 5
+    VARIABLE = 6
 
     def __init__(self, type, value):
         self.type = type
@@ -152,15 +218,21 @@ class BasToken:
     def iskeyword(self, value):
         """予約語がvalueであればTrue"""
         return self.type == self.KEYWORD and self.value == value
+    def isvartype(self):
+        """変数型を表すトークンならTrue"""
+        return self.type == self.KEYWORD and \
+           (self.value >= self.INT and self.value <= self.STR)
 
     def resulttype(self, a=None):
         """トークン同士の演算結果に与える型を得る(strはエラー)"""
         if self.type == self.STR:
             return None
+        rty = self.type if self.type != self.CHAR else self.INT # char->intとする
         if a != None:
             if a.type == self.STR:
                return None
-            rty = self.type if self.type == a.type else self.FLOAT     # intとfloatの演算結果はfloat
+            aty = a.type if a.type != self.CHAR else self.INT   # char->intとする
+            rty = rty if rty == aty else self.FLOAT     # intとfloatの演算結果はfloat
         return rty
 
     def __repr__(self):
@@ -302,12 +374,14 @@ class Bas2C:
         self.t = BasTokenGen(fh)
         self.label = []
         self.subr = []
+        self.g = BasNameSpace()
         self.setpass(0)
 
     def setpass(self, bpass):
         """変換パスを設定する"""
         self.bpass = bpass
         self.mainend = False
+        self.g.setpass(bpass)
         self.t.rewind()
 
     def expect(self, v):
@@ -347,10 +421,15 @@ class Bas2C:
         if (x := self.t.fetch()).issymbol(s):
             return x
         return self.t.unfetch(x)
+    def checkvartype(self):
+        """変数型を表すトークンが出たら読み進む"""
+        if (x := self.t.fetch()).isvartype():
+            return x
+        return self.t.unfetch(x)
 
     def gendefine(self):
-        """関数定義を出力する"""
-        r = ''
+        """グローバル変数、関数の定義を出力する"""
+        r = self.g.definition()
         for l in self.subr:         # サブルーチンのプロトタイプを出力する
             r += f'void S{l:05d}(void);\n'
         return r
@@ -436,12 +515,12 @@ class Bas2C:
                         return r + '}\n'
 
             elif s.value == BasKeyword.FOR:
-                v = self.expect(self.nexttype(BasToken.VARIABLE))
+                v = self.expect(self.lvalue())
                 self.nextkeyword(BasKeyword.EQ)
                 f = self.expect(self.expr())
                 self.nextkeyword(BasKeyword.TO)
                 t = self.expect(self.expr())
-                return f'for ({v} = {f.value}; {v} <= {t.value}; {v}++) ' + '{\n'
+                return f'for ({v.value} = {f.value}; {v.value} <= {t.value}; {v.value}++) ' + '{\n'
 
             elif s.value == BasKeyword.NEXT:
                 return '}\n'
@@ -501,6 +580,18 @@ class Bas2C:
 
         else:
             return None
+
+    def lvalue(self):
+        """左辺値(代入可能な変数)を得る"""
+        var = self.expect(self.t.fetch())
+        if not var.istype(BasToken.VARIABLE):
+            return None
+        v = self.g.find(var.value)
+        if not v:
+            # 未定義変数への代入時はint型のグローバル変数として定義する
+            self.g.new(var.value, BasVariable.INT)
+            v = self.g.find(var.value)
+        return BasToken(v.type, f'{v.name}')
 
     def expr(self):
         """"式を解析、変換してトークンで返す"""
