@@ -28,6 +28,16 @@ class BasKeyword:
     FOR         = 2002
     TO          = 2003
     NEXT        = 2004
+    WHILE       = 2005
+    ENDWHILE    = 2006
+    REPEAT      = 2007
+    UNTIL       = 2008
+    BREAK       = 2009
+    CONTINUE    = 2010
+    SWITCH      = 2011
+    CASE        = 2012
+    DEFAULT     = 2013
+    ENDSWITCH   = 2014
 
     EOL         = 9999
 
@@ -36,6 +46,16 @@ class BasKeyword:
         'for'       : FOR,
         'to'        : TO,
         'next'      : NEXT,
+        'while'     : WHILE,
+        'endwhile'  : ENDWHILE,
+        'repeat'    : REPEAT,
+        'until'     : UNTIL,
+        'break'     : BREAK,
+        'continue'  : CONTINUE,
+        'switch'    : SWITCH,
+        'case'      : CASE,
+        'default'   : DEFAULT,
+        'endswitch' : ENDSWITCH,
 
         'mod'       : MOD,
         'shr'       : SHR,
@@ -302,6 +322,41 @@ class Bas2C:
 
             elif s.value == BasKeyword.NEXT:
                 return '}\n'
+
+            elif s.value == BasKeyword.WHILE:
+                x = self.expect(self.expr())
+                return f'while ({x.value}) ' + '{\n'
+
+            elif s.value == BasKeyword.ENDWHILE:
+                return '}\n'
+
+            elif s.value == BasKeyword.REPEAT:
+                return 'do {\n'
+
+            elif s.value == BasKeyword.UNTIL:
+                x = self.expect(self.expr())
+                return '} ' + f'while (!({x.value}));\n'
+
+            elif s.value == BasKeyword.SWITCH:
+                x = self.expect(self.expr())
+                return f'switch ({x.value}) ' + '{\n'
+
+            elif s.value == BasKeyword.CASE:
+                x = self.expect(self.expr())
+                return f'case {x.value}:\n'
+
+            elif s.value == BasKeyword.DEFAULT:
+                return 'default:\n'
+
+            elif s.value == BasKeyword.ENDSWITCH:
+                return '}\n'
+
+            elif s.value == BasKeyword.BREAK:
+                self.checksymbol(';')
+                return 'break;\n'
+
+            elif s.value == BasKeyword.CONTINUE:
+                return 'continue;\n'
 
         else:
             return None
