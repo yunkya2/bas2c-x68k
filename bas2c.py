@@ -1,4 +1,28 @@
 #!/bin/env python3
+#
+# X-BASIC to C converter bas2c.py
+# Copyright (c) 2024 Yuichi Nakamura (@yunkya2)
+#
+# The MIT License (MIT)
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+#
 import sys
 import re
 
@@ -62,6 +86,8 @@ class BasKeyword:
     ERROR       = 2030
 
     EOL         = 9999
+
+    NASI        = '0x4e415349'      # 外部関数の引数省略時に使われる値
 
     keyword = {
         'print'     : PRINT,
@@ -137,6 +163,35 @@ class BasKeyword:
         if w := cls.keywordop.get(word[:1], None):
             return (w, word[1:])
         return None        
+
+    # 組込/外部関数定義情報
+    exfnlist = {}
+
+    @classmethod
+    def exfninit(cls, fh):
+        """組込/外部関数定義情報をファイルから読み込む"""
+        grp = ''
+        w = 5000
+        while l := fh.readline():
+            if m := re.match('\[(.*)\]',l):
+                grp = m.group(1)
+                continue
+            m = re.match('(\w+)?\s+([\w$]+)\s*([\(\[]?[\w,-]*[\)\]]?)\s*:\s*(\w*)\(([#@&$%,]*)\)',l)
+            if not m:
+                continue
+            cls.keyword[m.group(2)] = w
+            cls.exfnlist[w] = BasExFunc(m.group(1),m.group(2),m.group(3),m.group(4),m.group(5),grp)
+            w += 1
+
+class BasExFunc:
+    """組込/外部関数定義情報を保持するクラス"""
+    def __init__(self, type, name, arg, cfunc, carg, group):
+        self.type = type        # 戻り値の型
+        self.name = name        # 関数名
+        self.arg = arg          # 引数の型
+        self.cfunc = cfunc      # C関数名
+        self.carg = carg        # C引数の型
+        self.group = group      # グループ名 (BASIC/MOUSE/STICK/..)
 
 class BasVariable:
     """変数/関数の型と名前を保持するクラス"""
@@ -443,6 +498,7 @@ class Bas2C:
         self.g = BasNameSpace()
         self.strtmp = 0
         self.strtmp_max = 0
+        self.exfngroup = set()
         self.setpass(0)
 
     def setpass(self, bpass):
@@ -799,6 +855,8 @@ class Bas2C:
             elif s.value == BasKeyword.END:
                 return 'return;\n'
 
+            elif r := self.exfncall(s.value):
+                return r.value + ';\n'
             else:
                 raise Exception('構文エラー')
 
@@ -930,6 +988,108 @@ class Bas2C:
         if not v:
             return BasToken.function(fn)    # 未定義関数だったらFUNCTION型を返す
         return BasToken(v.type, f'{fn}({arg})')
+
+    def exfncall(self, kw, isexpr=False):
+        """BasKeyword kwが組込関数/外部関数であれば引数を与えて呼び出す"""
+        nt = self.peek()    # 次のトークンを先読みする
+
+        # 組込関数の特殊ケース (intは通常の予約語でもあるため先にチェックする)
+        if kw == BasKeyword.INT and nt.issymbol('('):   # int(..) -> int$$(..)
+            kw = BasKeyword.find('int$$')
+
+        if not (ex := BasKeyword.exfnlist.get(kw, None)):
+            return None     # キーワードだが組込関数/外部関数ではない
+
+        # 組込関数の特殊ケース
+        if ex.name == 'inkey$' and nt.issymbol('('):            # inkey$(0) -> inkey$$(0)
+            ex = BasKeyword.exfnlist.get(BasKeyword.find('inkey$$'))
+        if ex.name == 'color' and nt.issymbol('['):             # color[..] -> color$$(..)
+            ex = BasKeyword.exfnlist.get(BasKeyword.find('color$$'))
+        if ex.name == 'date$' and nt.iskeyword(BasKeyword.EQ):  # date$= -> date$$
+            ex = BasKeyword.exfnlist.get(BasKeyword.find('date$$'))
+            self.nextkeyword(BasKeyword.EQ)
+        if ex.name == 'time$' and nt.iskeyword(BasKeyword.EQ):  # time$= -> time$$
+            ex = BasKeyword.exfnlist.get(BasKeyword.find('time$$'))
+            self.nextkeyword(BasKeyword.EQ)
+
+        self.exfngroup.add(ex.group)    # 使われた関数グループを記録する(#includeに使用するため)
+
+        map = { 'I':BasToken.INT, 'C':BasToken.CHAR, 'F':BasToken.FLOAT, 'S':BasToken.STR }
+        rty = self.expect(map.get(ex.type, BasToken.INT if not isexpr else None))  # 戻り値型(式なら必須)
+
+        fn = ex.name if not ex.cfunc else ex.cfunc  # C関数名
+        av=[]
+        a = ex.arg      # X-BASIC引数の型
+        while a != '':
+            if a[0] in '([])':
+                self.nextsymbol(a[0])
+            elif a[0] == ',':
+                if not self.checksymbol(','):
+                    a = a[1:]                   # 残りの引数がすべて省略された
+                    while a != '':
+                        if a[0] in 'ISCF' and a[1] == '-':
+                            av.append(BasKeyword.NASI)
+                            a = a[2:]
+                        elif a[0] == ',':
+                            a = a[1:]
+                        elif a[0] in '([])':
+                            self.nextsymbol(a[0])
+                            a = a[1:]
+                        else:
+                            self.expect(None)
+            elif a[0] in 'ISCFN':
+                if len(a) > 1 and a[1] == 'A':  # 配列
+                    a = a[1:]
+                    vn = self.nexttype(BasToken.VARIABLE)   # 配列変数名
+                    va = self.expect(self.g.find(vn))       # 定義済みであることを確認
+                    self.expect(va.isarray())       # TBD 型の確認
+                    av.append(vn)
+                else:
+                    x = self.expr()
+                    if x == None and a[1] == '-':   # 引数が省略された
+                        if ex.name == 'exit':       # 特殊ケース exit() -> exit(0)
+                            av.append('0')
+                        elif ex.name == 'pi':       # 特殊ケース pi() -> pi()
+                            fn = 'pi'
+                            av.append(None)
+                        else:
+                            av.append(BasKeyword.NASI)
+                        a = a[1:]
+                    else:
+                        if ex.name == 'str$' and x.istype(BasToken.FLOAT):
+                            fn = 'b_strfS'          # 特殊ケース str$(float) -> b_strfS(float)
+                        elif ex.name == 'abs' and x.istype(BasToken.FLOAT):
+                            fn = 'fabs'             # 特殊ケース abs(float) -> fabs(float)
+                            rty= BasToken.FLOAT     # 戻り値もfloatになる
+                        av.append(x.value)          # TBD 型の確認
+            a = a[1:]
+        arg=''
+        a = ex.carg     # C引数の型
+        i = 0
+        while a != '':
+            if a[0] == ',':
+                arg += ','
+                a = a[1:]
+                continue
+            if a[0] == '#':                     # 1つ前の引数のサイズ
+                arg += f'sizeof({av[i-1]:s})'
+            elif a[0] == '@':                   # 1つ前の引数の要素サイズ
+                arg += f'sizeof({av[i-1]:s}[0])'
+            elif a[0] == '&':                   # 引数へのポインタ
+                arg += f'&{av[i]:s}'
+                i += 1
+            elif a[0] == '%':                   # 引数
+                arg += f'{av[i]:s}' if av[i] != None else ''
+                i += 1
+            elif a[0] == '$':                   # 文字列作業用ワーク
+                arg += f'strtmp{self.strtmp}'
+                self.strtmp += 1
+            elif a[0] == ',':
+                arg += ','
+            a = a[1:]
+        return BasToken(rty, f'{fn}({arg})')
+
+##############################################################################
 
     def expr(self):
         """"式を解析、変換してトークンで返す"""
@@ -1073,6 +1233,9 @@ class Bas2C:
             r = self.t.fetch()
             if r.isconst():                             # 定数
                 return r
+            elif r.istype(BasToken.KEYWORD):
+                if v := self.exfncall(r.value, True):   # 組込関数/外部関数
+                    return v
             elif v := self.lvalue(r):                   # 左辺値 or 関数名
                 if v.istype(BasToken.FUNCTION):
                     return self.fncall(v.value)         # 関数呼び出し
@@ -1094,10 +1257,15 @@ class Bas2C:
                 pass                    # 1パス目のエラーは無視
 
         self.setpass(2)     # pass 2
+        print('#include <string.h>')
+        for e in self.exfngroup:
+            e = 'basic0' if e == '' else e
+            print(f'#include <{e.lower()}.h>')
         print(self.gendefine(), end='')
         for _ in range(self.strtmp_max):
             print(f'static unsigned char strtmp{_}[258];')
         print('void main(int b_argc, char *b_argv[])\n{')
+        print('b_init();')
         while True:
             try:
                 s = self.statement()
@@ -1118,6 +1286,9 @@ class Bas2C:
 ##############################################################################
 
 if __name__ == '__main__':
+    with open('bas2c.def') as f:
+        BasKeyword.exfninit(f)
+
     if len(sys.argv) < 2:
         fh = sys.stdin
     else:
