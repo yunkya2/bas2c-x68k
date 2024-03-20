@@ -490,7 +490,11 @@ class BasTokenGen:
 ##############################################################################
 
 class Bas2C:
-    def __init__(self, fh):
+    DEBUG       = (1 << 0)      # デバッグモード
+    UNDEFERR    = (1 << 1)      # 未定義関数呼び出しをエラーにする
+
+    def __init__(self, fh, flag=0):
+        self.flag = flag
         self.fh = fh
         self.t = BasTokenGen(fh)
         self.label = []
@@ -1014,7 +1018,8 @@ class Bas2C:
     def fncall(self, fn):
         """関数呼び出しを生成する"""
         v = self.g.find(fn)                 # 関数が定義済みか調べる
-        self.expect(v or (self.bpass == 1)) # (パス1なら未定義でもよい)
+        if self.flag & Bas2C.UNDEFERR:
+            self.expect(v or (self.bpass == 1)) # (パス1なら未定義でもよい)
         arg = ''                            # 引数を得る
         self.nextsymbol('(')
         while True:
@@ -1024,9 +1029,8 @@ class Bas2C:
                 break
             arg += ', '
         self.nextsymbol(')')
-        if not v:
-            return BasToken.function(fn)    # 未定義関数だったらFUNCTION型を返す
-        return BasToken(v.type, f'{fn}({arg})')
+        # 未定義関数だったらFUNCTION型を返す
+        return BasToken(BasToken.FUNCTION if not v else v.type, f'{fn}({arg})')
 
     def exfncall(self, kw, isexpr=False):
         """BasKeyword kwが組込関数/外部関数であれば引数を与えて呼び出す"""
@@ -1308,18 +1312,20 @@ class Bas2C:
         while True:
             try:
                 s = self.statement()
+                fo.write(self.genlabel())
+                if s == None:
+                    fo.write(self.nestclose(''))
+                    break
+                if s:
+                    fo.write(s)
             except Exception as e:
                 print(f'Error: {e} in line {self.t.lineno}({self.t.baslineno})')
                 print(self.t.curline,end='')
                 pos = len(self.t.curline) - len(self.t.preline) 
                 print(' ' * pos + '^')
-                raise
-            fo.write(self.genlabel())
-            if s == None:
+                if self.flag & Bas2C.DEBUG:
+                    raise
                 break
-            if s:
-                fo.write(s)
-        fo.write(self.nestclose(''))
 
 ##############################################################################
 
