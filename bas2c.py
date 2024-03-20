@@ -504,11 +504,11 @@ class Bas2C:
     def setpass(self, bpass):
         """変換パスを設定する"""
         self.bpass = bpass
-        self.mainend = False
         self.updatestrtmp()
         self.g.setpass(bpass)
         self.g.setlocal(False)
         self.initmp = 0
+        self.nest = 'M'
         self.t.rewind()
 
     def expect(self, v):
@@ -561,16 +561,32 @@ class Bas2C:
             r += f'void S{l:05d}(void);\n'
         return r
 
+    def nestin(self, type):
+        """ネストを深くする"""
+        self.nest = type + self.nest
+
+    def nestout(self, type):
+        """ネストを浅くする"""
+        self.expect(self.nest[0] == type)
+        self.nest = self.nest[1:]
+
+    def nestclose(self, next=''):
+        """必要なら関数末尾の括弧を閉じる"""
+        if self.nest != '' and self.nest in 'MmSF':
+            r = 'b_exit(0);\n' if self.nest == 'M' else ''
+            self.nest = next
+            return r + '}\n'
+        self.expect(self.nest == '')
+        self.nest = next
+        return ''
+
     def genlabel(self):
         """必要ならGOTO飛び先のラベル定義、GOSUB飛び先の関数定義を出力する"""
         if l := self.t.getbaslineno():
             if l in self.label:
                 return f'L{l:06d}:\n'
             elif l in self.subr:
-                r = ''
-                if not self.mainend:
-                    r = '}\n'
-                    self.mainend = True
+                r = self.nestclose('S')
                 return r + f'void S{l:06d}(void)\n' + '{\n'
         return ''
 
@@ -594,6 +610,13 @@ class Bas2C:
 
         elif s := self.checktype(BasToken.KEYWORD):
             if s.value == BasKeyword.EOL:
+                if self.nest != '':
+                    if self.nest[0] == 'i':     # then節が改行で終了する場合
+                        self.nestout('i')
+                        return '}\n'
+                    elif self.nest[0] == 'e':   # else節が改行で終了する場合
+                        self.nestout('e')
+                        return '}\n'
                 return ''
 
             elif s.value == BasKeyword.DIM:
@@ -685,37 +708,25 @@ class Bas2C:
                 return r + f'b_linput({a.value},sizeof({a.value}));\n'
 
             elif s.value == BasKeyword.IF:
+                x = self.expect(self.expr())
+                self.nextkeyword(BasKeyword.THEN)
+                self.nestin('I' if self.checksymbol('{') else 'i')
+                return f'if ({x.value}) ' + '{\n'
+
+            elif s.value == BasKeyword.ELSE:
                 r = ''
-                while True:
+                if self.nest[0] == 'e':         # ネスト内側のelse節が終了する
+                    self.nestout('e')
+                    r += '}\n'
+                self.nestout('i')
+                if self.checkkeyword(BasKeyword.IF):    # else if が続く場合
                     x = self.expect(self.expr())
                     self.nextkeyword(BasKeyword.THEN)
-                    r += f'if ({x.value}) ' + '{\n'
-                    # then節の命令取り込み
-                    if self.checksymbol('{'):           # { } で囲まれている場合
-                        while not self.checksymbol('}'):
-                            r += self.statement()
-                        if not self.checkkeyword(BasKeyword.ELSE):
-                            return r + '}\n'                        # elseなしで終わり
-                    else:                               # { } で囲まれていない場合
-                        while not self.checkkeyword(BasKeyword.ELSE):
-                            r += self.statement()
-                            if self.checkkeyword(BasKeyword.EOL):   # 行末が来たら
-                                return r + '}\n'                    # elseなしで終わり
-                            elif self.peek().issymbol('}'):
-                                return r + '}\n'                    # elseなしで終わり
-                    r += '} else '
-                    if not self.checkkeyword(BasKeyword.IF):
-                        r += '{\n'
-                        # else節の命令取り込み
-                        if self.checksymbol('{'):           # { } で囲まれている場合
-                            while not self.checksymbol('}'):
-                                r += self.statement()
-                        else:                               # { } で囲まれていない場合
-                            while not self.checkkeyword(BasKeyword.EOL):
-                                if self.peek().issymbol('}'):
-                                    break
-                                r += self.statement()
-                        return r + '}\n'
+                    self.nestin('I' if self.checksymbol('{') else 'i')
+                    return r + '} else ' + f'if ({x.value}) ' + '{\n'
+                else:                                   # else で終了する場合x
+                    self.nestin('E' if self.checksymbol('{') else 'e')
+                    return r + '} else {\n'
 
             elif s.value == BasKeyword.FOR:
                 v = self.expect(self.lvalue())
@@ -723,27 +734,34 @@ class Bas2C:
                 f = self.expect(self.expr())
                 self.nextkeyword(BasKeyword.TO)
                 t = self.expect(self.expr())
+                self.nestin('f')
                 return f'for ({v.value} = {f.value}; {v.value} <= {t.value}; {v.value}++) ' + '{\n'
 
             elif s.value == BasKeyword.NEXT:
+                self.nestout('f')
                 return '}\n'
 
             elif s.value == BasKeyword.WHILE:
                 x = self.expect(self.expr())
+                self.nestin('w')
                 return f'while ({x.value}) ' + '{\n'
 
             elif s.value == BasKeyword.ENDWHILE:
+                self.nestout('w')
                 return '}\n'
 
             elif s.value == BasKeyword.REPEAT:
+                self.nestin('r')
                 return 'do {\n'
 
             elif s.value == BasKeyword.UNTIL:
                 x = self.expect(self.expr())
+                self.nestout('r')
                 return '} ' + f'while (!({x.value}));\n'
 
             elif s.value == BasKeyword.SWITCH:
                 x = self.expect(self.expr())
+                self.nestin('s')
                 return f'switch ({x.value}) ' + '{\n'
 
             elif s.value == BasKeyword.CASE:
@@ -754,6 +772,7 @@ class Bas2C:
                 return 'default:\n'
 
             elif s.value == BasKeyword.ENDSWITCH:
+                self.nestout('s')
                 return '}\n'
 
             elif s.value == BasKeyword.GOTO:
@@ -806,14 +825,12 @@ class Bas2C:
                 # 関数名はグローバルで登録する
                 v = self.g.new(func, fty, arg, func=True, forceglobl=True)
 
-                r = ''
-                if not self.mainend:
-                    r = '}\n'
-                    self.mainend = True
+                r = self.nestclose('F')
                 return r + f'\n{v.typename(True)} {func}({arg})\n' + '{\n'
 
             elif s.value == BasKeyword.ENDFUNC:
                 self.g.setlocal(False)
+                self.nestout('F')
                 return '}\n'
 
             elif s.value == BasKeyword.RETURN:
@@ -825,7 +842,7 @@ class Bas2C:
                     else:
                         return 'return 0;\n'
                 else:
-                    return '}\n'
+                    return 'return;\n'
 
             elif s.value == BasKeyword.BREAK:
                 self.checksymbol(';')
@@ -853,12 +870,37 @@ class Bas2C:
                 return f'/* error {x.value} */\n'
 
             elif s.value == BasKeyword.END:
-                return 'return;\n'
+                if self.nest == 'M':
+                    self.nest = 'm'
+                return 'b_exit(0);\n'
 
             elif r := self.exfncall(s.value):
                 return r.value + ';\n'
             else:
                 raise Exception('構文エラー')
+
+        elif s := self.checktype(BasToken.SYMBOL):
+            if s.value == '}':                  # if then/else節が終了する場合
+                r = ''
+                if self.nest[0] == 'i' or self.nest[0] == 'e':
+                    # ブロック内側のthen/else節が終了する
+                    r = '}\n'
+                    self.nest = self.nest[1:]
+                if self.nest[0] == 'E':         # else節が終了する
+                    self.nestout('E')
+                    return r + '}\n'
+                else:                           # then節が終了する
+                    self.nestout('I')
+                    if not self.checkkeyword(BasKeyword.ELSE):
+                        return r + '}\n'
+                    if self.checkkeyword(BasKeyword.IF):
+                        x = self.expect(self.expr())
+                        self.nextkeyword(BasKeyword.THEN)
+                        self.nestin('I' if self.checksymbol('{') else 'i')
+                        return r + '} else ' + f'if ({x.value}) ' + '{\n'
+                    else:
+                        self.nestin('E' if self.checksymbol('{') else 'e')
+                        return r + '} else {\n'
 
         elif s := self.lvalue(None, True):                  # 左辺値 or 関数名の場合
             if s.istype(BasToken.FUNCTION):
@@ -876,8 +918,7 @@ class Bas2C:
             else:                                           # 単純変数への代入
                 return f'{s.value} = {x};\n'
 
-        else:
-            return None
+        return None
 
 ##############################################################################
 
@@ -1278,8 +1319,7 @@ class Bas2C:
                 break
             if s:
                 print(s, end='')
-        if not self.mainend:
-            print('}')
+        print(self.nestclose(''), end='')
 
 ##############################################################################
 
