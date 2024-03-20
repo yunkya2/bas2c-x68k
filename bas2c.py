@@ -1286,7 +1286,7 @@ class Bas2C:
 
 ##############################################################################
 
-    def start(self):
+    def start(self, fo=sys.stdout):
         self.setpass(1)     # pass 1
         while True:
             try:
@@ -1296,15 +1296,15 @@ class Bas2C:
                 pass                    # 1パス目のエラーは無視
 
         self.setpass(2)     # pass 2
-        print('#include <string.h>')
+        fo.write('#include <string.h>\n')
         for e in self.exfngroup:
             e = 'basic0' if e == '' else e
-            print(f'#include <{e.lower()}.h>')
-        print(self.gendefine(), end='')
+            fo.write(f'#include <{e.lower()}.h>\n')
+        fo.write(self.gendefine())
         for _ in range(self.strtmp_max):
-            print(f'static unsigned char strtmp{_}[258];')
-        print('void main(int b_argc, char *b_argv[])\n{')
-        print('b_init();')
+            fo.write(f'static unsigned char strtmp{_}[258];\n')
+        fo.write('void main(int b_argc, char *b_argv[])\n{\n')
+        fo.write('b_init();\n')
         while True:
             try:
                 s = self.statement()
@@ -1314,12 +1314,12 @@ class Bas2C:
                 pos = len(self.t.curline) - len(self.t.preline) 
                 print(' ' * pos + '^')
                 raise
-            print(self.genlabel(), end='')
+            fo.write(self.genlabel())
             if s == None:
                 break
             if s:
-                print(s, end='')
-        print(self.nestclose(''), end='')
+                fo.write(s)
+        fo.write(self.nestclose(''))
 
 ##############################################################################
 
@@ -1336,7 +1336,13 @@ if __name__ == '__main__':
         fh = sys.stdin
     else:
         fh = open(sys.argv[1], 'r', encoding='cp932')
+
+    if len(sys.argv) < 3:
+        fo = sys.stdout
+    else:
+        fo = open(sys.argv[2], 'w')
+
     b = Bas2C(fh)
-    b.start()
+    b.start(fo)
 
     sys.exit(0)
