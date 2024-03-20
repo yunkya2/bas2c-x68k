@@ -153,7 +153,7 @@ class BasKeyword:
     @classmethod
     def find(cls, word):
         """wordが予約語ならその値を返す"""
-        return cls.keyword.get(word, None)
+        return cls.keyword.get(word.lower(), None)
 
     @classmethod
     def findop(cls, word):
