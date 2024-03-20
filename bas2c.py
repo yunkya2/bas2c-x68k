@@ -966,8 +966,6 @@ class Bas2C:
                     n += '\n'
                 else:
                     n += self.expect(self.expr()).value
-                    self.checksymbol(',')
-                    n += ','
             return n
         else:
             return self.expect(self.expr()).value
