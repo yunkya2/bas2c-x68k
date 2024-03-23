@@ -492,6 +492,7 @@ class BasTokenGen:
 class Bas2C:
     DEBUG       = (1 << 0)      # デバッグモード
     UNDEFERR    = (1 << 1)      # 未定義関数呼び出しをエラーにする
+    NOBINIT     = (1 << 2)      # プログラム開始/終了時にb_init(),b_exit()を呼ばない
 
     def __init__(self, fh, flag=0):
         self.flag = flag
@@ -504,6 +505,7 @@ class Bas2C:
         self.strtmp_max = 0
         self.exfngroup = set()
         self.setpass(0)
+        self.b_exit = 'b_exit' if not (flag & self.NOBINIT) else 'exit'
 
     def setpass(self, bpass):
         """変換パスを設定する"""
@@ -577,7 +579,7 @@ class Bas2C:
     def nestclose(self, next=''):
         """必要なら関数末尾の括弧を閉じる"""
         if self.nest != '' and self.nest in 'MmSF':
-            r = 'b_exit(0);\n' if self.nest == 'M' else ''
+            r = self.b_exit + '(0);\n' if self.nest != 'm' else ''
             self.nest = next
             return r + '}\n'
         self.expect(self.nest == '')
@@ -876,7 +878,7 @@ class Bas2C:
             elif s.value == BasKeyword.END:
                 if self.nest == 'M':
                     self.nest = 'm'
-                return 'b_exit(0);\n'
+                return self.b_exit + '(0);\n'
 
             elif r := self.exfncall(s.value):
                 return r.value + ';\n'
@@ -1300,15 +1302,19 @@ class Bas2C:
                 pass                    # 1パス目のエラーは無視
 
         self.setpass(2)     # pass 2
+        fo.write('#include <basic0.h>\n')
         fo.write('#include <string.h>\n')
+        if self.flag & Bas2C.NOBINIT:
+            fo.write('#include <stdlib.h>\n')
         for e in self.exfngroup:
-            e = 'basic0' if e == '' else e
-            fo.write(f'#include <{e.lower()}.h>\n')
+            if e:
+                fo.write(f'#include <{e.lower()}.h>\n')
         fo.write(self.gendefine())
         for _ in range(self.strtmp_max):
             fo.write(f'static unsigned char strtmp{_}[258];\n')
         fo.write('void main(int b_argc, char *b_argv[])\n{\n')
-        fo.write('b_init();\n')
+        if not self.flag & Bas2C.NOBINIT:
+            fo.write('b_init();\n')
         while True:
             try:
                 s = self.statement()
@@ -1329,26 +1335,65 @@ class Bas2C:
 
 ##############################################################################
 
-if __name__ == '__main__':
+def readdef():
+    """組込/外部関数の定義ファイルを読み込む"""
     import os
-    if hasattr(os,'path'):
+    if hasattr(os,'path'):      # bas2c.py と同じディレクトリにある bas2c.def を読む
         sdir = os.path.dirname(os.path.abspath(__file__))
     else:
         sdir = '.'
     with open(sdir + '/bas2c.def') as f:
         BasKeyword.exfninit(f)
 
-    if len(sys.argv) < 2:
-        fh = sys.stdin
-    else:
-        fh = open(sys.argv[1], 'r', encoding='cp932')
+def fileencoding(fname):
+    """ファイルのエンコーディングを推測する"""
+    try:
+        with open(fname, 'r') as f:
+            f.read()
+    except Exception as e:
+        return 'cp932'
+    return None
 
-    if len(sys.argv) < 3:
-        fo = sys.stdout
-    else:
-        fo = open(sys.argv[2], 'w')
+def usage():
+    print(f'usage: {sys.argv[0]} [-D][-u][-s] [-o output.c] input.bas')
+    sys.exit(1)
 
-    b = Bas2C(fh)
+if __name__ == '__main__':
+    flag = 0
+    finame = None
+    foname = None
+    focode = None
+    i = 1
+    while i < len(sys.argv):
+        if sys.argv[i][0] == '-':
+            if sys.argv[i] == '-D':
+                flag |= Bas2C.DEBUG
+            elif sys.argv[i] == '-u':
+                flag |= Bas2C.UNDEFERR
+            elif sys.argv[i] == '-n':
+                flag |= Bas2C.NOBINIT
+            elif sys.argv[i] == '-s':
+                focode = 'cp932'
+            elif sys.argv[i] == '-o':
+                i += 1
+                foname = sys.argv[i]
+            else:
+                usage()
+        else:
+            if not finame:
+                finame = sys.argv[i]
+            else:
+                foname = sys.argv[i]
+        i += 1
+
+    if finame != None and foname == None:
+        foname = finame.replace('.bas','').replace('.BAS','') + '.c'
+
+    fh = open(finame, 'r', encoding=fileencoding(finame)) if finame else sys.stdin
+    fo = open(foname, 'w', encoding=focode) if foname and foname != '-' else sys.stdout
+
+    readdef()
+    b = Bas2C(fh, flag)
     b.start(fo)
 
     sys.exit(0)
