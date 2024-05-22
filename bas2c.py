@@ -206,12 +206,13 @@ class BasVariable:
     DIM_FLOAT   = DIM + FLOAT       # 13
     DIM_STR     = DIM + STR         # 14
 
-    def __init__(self, name, type, arg='', init='', func=False):
+    def __init__(self, name, type, arg='', init='', func=False, funcarg=False):
         self.name = name
         self.type = type
         self.arg = arg
         self.init = init
         self.func = func
+        self.funcarg = funcarg
 
     def isarray(self):
         """配列であればTrue"""
@@ -227,6 +228,8 @@ class BasVariable:
         return map[self.type] if self.type in map else map[self.type - self.DIM]
 
     def definition(self, globl=False):
+        if self.funcarg:
+            return ''
         if self.func:
             return f'{self.typename()} {self.name}({self.arg});\n'
         else:
@@ -243,44 +246,46 @@ class BasNameSpace:
     """グローバル/ローカル名前空間を保持するクラス"""
     def __init__(self):
         self.glist = {}
-        self.llist = None
+        self.llist = {}
+        self.curlocal = None
         self.bpass = 0
-
-    def setlocal(self, enable):
-        """ローカル名前空間を有効にする/無効にする"""
-        self.llist = {} if enable else None
 
     def setpass(self, bpass):
         self.bpass = bpass
 
-    def find(self, name, lonly=False):
+    def setlocal(self, name):
+        """ローカル名前空間を設定する"""
+        if name:
+            if self.bpass == 1:     # 新たな名前空間を作るのはpass1のみ
+                self.llist[name] = {}
+            self.curlocal = self.llist[name]
+        else:
+            self.curlocal = None
+
+    def find(self, name):
         """名前がグローバルorローカル名前空間に定義されているかを調べる"""
-        if self.llist != None:
-            if v := self.llist.get(name, None):
+        if self.curlocal != None:
+            if v := self.curlocal.get(name, None):
                 return v
-            if lonly:
-                return None
         return self.glist.get(name, None)
 
-    def new(self, name, type, arg='', init='', func=False, forceglobl=False):
+    def new(self, name, type, arg='', init='', func=False, funcarg=False, forceglobl=False):
         """変数を名前空間に定義する"""
-        if forceglobl or (self.llist == None):  # グローバル変数定義
-            if self.bpass == 1:                 # 変数定義を行うのはpass1のみ
-                if self.glist.get(name, None):
-                    raise Exception('変数の多重定義')
-                self.glist[name] = BasVariable(name, type, arg, init, func)
-            return self.glist[name]
-        else:                                   # ローカル変数定義
-            if self.llist.get(name, None):
+        # 現在有効な名前空間を取得する
+        gls = self.glist if forceglobl or (self.curlocal == None) else self.curlocal
+        # 変数定義を行うのはpass1のみ        
+        if self.bpass == 1:
+            if gls.get(name, None):
                 raise Exception('変数の多重定義')
-            self.llist[name] = BasVariable(name, type, arg, init, func)
-            return self.llist[name]
+            gls[name] = BasVariable(name, type, arg, init, func, funcarg)
+        return gls[name]
 
-    def definition(self):
-        """グローバル名前空間に定義されている変数の定義リストを出力する"""
+    def definition(self, name=None):
+        """グローバル/ローカル名前空間に定義されている変数の定義リストを出力する"""
+        gls = self.glist if name == None else self.llist[name]
         r = ''
-        for k in self.glist:
-            r += self.glist[k].definition(True)
+        for k in gls:
+            r += gls[k].definition(name == None)
         return r
 
 class BasToken:
@@ -500,7 +505,7 @@ class Bas2C:
         self.t = BasTokenGen(fh)
         self.label = []
         self.subr = []
-        self.g = BasNameSpace()
+        self.nsp = BasNameSpace()
         self.strtmp = 0
         self.strtmp_max = 0
         self.exfngroup = set()
@@ -511,8 +516,8 @@ class Bas2C:
         """変換パスを設定する"""
         self.bpass = bpass
         self.updatestrtmp()
-        self.g.setpass(bpass)
-        self.g.setlocal(False)
+        self.nsp.setpass(bpass)
+        self.nsp.setlocal(None)
         self.initmp = 0
         self.nest = 'M'
         self.t.rewind()
@@ -562,7 +567,7 @@ class Bas2C:
 
     def gendefine(self):
         """グローバル変数、関数の定義を出力する"""
-        r = self.g.definition()
+        r = self.nsp.definition()
         for l in self.subr:         # サブルーチンのプロトタイプを出力する
             r += f'void S{l:05d}(void);\n'
         return r
@@ -802,8 +807,8 @@ class Bas2C:
                 # 関数名を取得する
                 func = self.nexttype(BasToken.VARIABLE)
 
-                # ローカル変数を初期化する
-                self.g.setlocal(True)
+                # ローカル変数名前空間を初期化する
+                self.nsp.setlocal(func)
 
                 # 引数を取得する
                 self.nextsymbol('(')
@@ -820,7 +825,7 @@ class Bas2C:
                             vty = self.expect(self.checkvartype()).value
                         # 引数をローカル変数として登録する
                         va = '[32+1]' if vty == BasVariable.STR else ''
-                        v = self.g.new(var, vty, va)
+                        v = self.nsp.new(var, vty, va, funcarg=True)
                         arg += f'{v.typename()} {var}{va}'
                         # もう引数がないならループを抜ける
                         if not self.checksymbol(','):
@@ -829,13 +834,17 @@ class Bas2C:
                     self.nextsymbol(')')
 
                 # 関数名はグローバルで登録する
-                v = self.g.new(func, fty, arg, func=True, forceglobl=True)
+                v = self.nsp.new(func, fty, arg, func=True, forceglobl=True)
 
                 r = self.nestclose('F')
-                return r + f'\n{v.typename(True)} {func}({arg})\n' + '{\n'
+                r += f'\n{v.typename(True)} {func}({arg})\n' + '{\n'
+                if self.bpass != 1:
+                    # 2pass目ならローカル変数定義を出力する
+                    r += self.nsp.definition(func)
+                return r
 
             elif s.value == BasKeyword.ENDFUNC:
-                self.g.setlocal(False)
+                self.nsp.setlocal(None)
                 self.nestout('F')
                 return '}\n'
 
@@ -914,7 +923,7 @@ class Bas2C:
             self.nextkeyword(BasKeyword.EQ)
             x = self.initvar(s.type)                        # 代入する値を得る
             if s.type >= BasVariable.DIM:                   # 配列なら一時変数の内容をコピー
-                v = self.g.find(s.value)
+                v = self.nsp.find(s.value)
                 r = f'static const {v.typename()} _initmp{self.initmp:04d}{v.arg} = {x};\n'
                 r += f'memcpy({s.value}, _initmp{self.initmp:04d}, sizeof({s.value}));\n'
                 self.initmp += 1
@@ -933,15 +942,15 @@ class Bas2C:
         var = self.expect(self.t.fetch() if not var else var)
         if not var.istype(BasToken.VARIABLE):
             return None
-        v = self.g.find(var.value)
+        v = self.nsp.find(var.value)
         if self.peek().issymbol('('):               # 配列または関数呼び出し
             if (not v) or (not v.isarray()):
                 return BasToken.function(var.value) # 関数呼び出し
         else:                                       # 単純変数
             if not v:
                 # 未定義変数への代入時はint型のグローバル変数として定義する
-                self.g.new(var.value, BasVariable.INT, forceglobl=True)
-                v = self.g.find(var.value)
+                self.nsp.new(var.value, BasVariable.INT, forceglobl=True)
+                v = self.nsp.find(var.value)
         ty = v.type
         sub = ''
         if v.isarray():
@@ -984,11 +993,8 @@ class Bas2C:
                     s += '[32+1]'       # デフォルトのバッファサイズ
             # 初期値が指定されていたら取得する
             x = self.initvar(rty) if self.checkkeyword(BasKeyword.EQ) else ''
-            # 変数を登録する
-            v = self.g.new(var, rty, s, x)
-            # ローカル変数であればその場に定義を出力する(グローバル変数はパス2冒頭でまとめて出力)
-            if self.g.llist != None:
-                r += v.definition()
+            # 定義された変数を名前空間に登録する
+            self.nsp.new(var, rty, s, x)
             # 複数の変数をまとめて定義するなら繰り返す
             if not self.checksymbol(','):
                 break
@@ -1019,7 +1025,7 @@ class Bas2C:
 
     def fncall(self, fn):
         """関数呼び出しを生成する"""
-        v = self.g.find(fn)                 # 関数が定義済みか調べる
+        v = self.nsp.find(fn)               # 関数が定義済みか調べる
         if self.flag & Bas2C.UNDEFERR:
             self.expect(v or (self.bpass == 1)) # (パス1なら未定義でもよい)
         arg = ''                            # 引数を得る
@@ -1086,7 +1092,7 @@ class Bas2C:
                 if len(a) > 1 and a[1] == 'A':  # 配列
                     a = a[1:]
                     vn = self.nexttype(BasToken.VARIABLE)   # 配列変数名
-                    va = self.expect(self.g.find(vn))       # 定義済みであることを確認
+                    va = self.expect(self.nsp.find(vn))     # 定義済みであることを確認
                     self.expect(va.isarray())       # TBD 型の確認
                     av.append(vn)
                 else:
