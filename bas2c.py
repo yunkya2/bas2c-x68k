@@ -206,6 +206,8 @@ class BasVariable:
     DIM_FLOAT   = DIM + FLOAT       # 13
     DIM_STR     = DIM + STR         # 14
 
+    STATICCONST = 20
+
     def __init__(self, name, type, arg='', init='', func=False, funcarg=False):
         self.name = name
         self.type = type
@@ -225,7 +227,14 @@ class BasVariable:
                 self.STR:   'unsigned char' }
         if fnres and self.type == self.STR:
             return 'unsigned char *'        # strを返す関数の戻り値型
-        return map[self.type] if self.type in map else map[self.type - self.DIM]
+        ty = self.type
+        r = ''
+        if ty >= self.STATICCONST:
+            ty -= self.STATICCONST
+            r = 'static const '
+        if ty >= self.DIM:
+            ty -= self.DIM
+        return r + map[ty]
 
     def definition(self, globl=False):
         if self.funcarg:
@@ -924,8 +933,9 @@ class Bas2C:
             x = self.initvar(s.type)                        # 代入する値を得る
             if s.type >= BasVariable.DIM:                   # 配列なら一時変数の内容をコピー
                 v = self.nsp.find(s.value)
-                r = f'static const {v.typename()} _initmp{self.initmp:04d}{v.arg} = {x};\n'
-                r += f'memcpy({s.value}, _initmp{self.initmp:04d}, sizeof({s.value}));\n'
+                # 一時変数を名前空間に登録する
+                self.nsp.new(f'_initmp{self.initmp:04d}', v.type + BasVariable.STATICCONST, v.arg, x)
+                r = f'memcpy({s.value}, _initmp{self.initmp:04d}, sizeof({s.value}));\n'
                 self.initmp += 1
                 return r
             if s.istype(BasToken.STR):                      # 文字列ならb_strncpy()
