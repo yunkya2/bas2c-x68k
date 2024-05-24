@@ -529,6 +529,7 @@ class Bas2C:
         self.nsp.setlocal(None)
         self.initmp = 0
         self.nest = 'M'
+        self.indentcnt = 0
         self.t.rewind()
 
     def expect(self, v):
@@ -589,16 +590,26 @@ class Bas2C:
         """ネストを浅くする"""
         self.expect(self.nest[0] == type)
         self.nest = self.nest[1:]
+        self.indentcnt -= 1
 
     def nestclose(self, next=''):
         """必要なら関数末尾の括弧を閉じる"""
         if self.nest != '' and self.nest in 'MmSF':
             r = self.b_exit + '(0);\n' if self.nest != 'm' else ''
             self.nest = next
+            self.indentcnt -= 1
             return r + '}\n'
         self.expect(self.nest == '')
         self.nest = next
         return ''
+
+    def indentinit(self):
+        """インデント量を初期化する"""
+        self.indentcnt = len(self.nest)
+
+    def indentout(self):
+        """インデントを返す"""
+        return '\t' * self.indentcnt
 
     def genlabel(self):
         """必要ならGOTO飛び先のラベル定義、GOSUB飛び先の関数定義を出力する"""
@@ -607,6 +618,8 @@ class Bas2C:
                 return f'L{l:06d}:\n'
             elif l in self.subr:
                 r = self.nestclose('S')
+                r += '\n/***************************/\n'
+                self.indentcnt += 1
                 return r + f'void S{l:06d}(void)\n' + '{\n'
         return ''
 
@@ -786,6 +799,7 @@ class Bas2C:
 
             elif s.value == BasKeyword.CASE:
                 x = self.expect(self.expr())
+                self.indentcnt -= 1
                 return f'case {x.value}:\n'
 
             elif s.value == BasKeyword.DEFAULT:
@@ -846,10 +860,15 @@ class Bas2C:
                 v = self.nsp.new(func, fty, arg, func=True, forceglobl=True)
 
                 r = self.nestclose('F')
-                r += f'\n{v.typename(True)} {func}({arg})\n' + '{\n'
+                r += '\n/***************************/\n'
+                r += f'{v.typename(True)} {func}({arg})\n' + '{\n'
                 if self.bpass != 1:
                     # 2pass目ならローカル変数定義を出力する
-                    r += self.nsp.definition(func)
+                    ra = ''
+                    for l in self.nsp.definition(func).splitlines():
+                        r += '\t' + l + '\n'
+                        ra = '\n'
+                    r += ra
                 return r
 
             elif s.value == BasKeyword.ENDFUNC:
@@ -1325,21 +1344,24 @@ class Bas2C:
         for e in self.exfngroup:
             if e:
                 fo.write(f'#include <{e.lower()}.h>\n')
-        fo.write(self.gendefine())
+        fo.write('\n' + self.gendefine())
         for _ in range(self.strtmp_max):
             fo.write(f'static unsigned char strtmp{_}[258];\n')
+        fo.write('\n/******** program start ********/\n')
         fo.write('void main(int b_argc, char *b_argv[])\n{\n')
         if not self.flag & Bas2C.NOBINIT:
-            fo.write('b_init();\n')
+            fo.write('\tb_init();\n')
         while True:
             try:
+                self.indentinit()
                 s = self.statement()
                 fo.write(self.genlabel())
                 if s == None:
                     fo.write(self.nestclose(''))
                     break
                 if s:
-                    fo.write(s)
+                    for l in s.splitlines():
+                        fo.write(self.indentout() + l + '\n')
             except Exception as e:
                 print(f'Error: {e} in line {self.t.lineno}({self.t.baslineno})')
                 print(self.t.curline,end='')
