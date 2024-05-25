@@ -307,6 +307,7 @@ class BasToken:
     KEYWORD  = 5
     VARIABLE = 6
     FUNCTION = 7
+    COMMENT  = 8
 
     def __init__(self, type, value):
         self.type = type
@@ -333,6 +334,9 @@ class BasToken:
     @classmethod
     def function(cls, value):
         return cls(cls.FUNCTION, value)
+    @classmethod
+    def comment(cls, value):
+        return cls(cls.COMMENT, value)
 
     def isconst(self):
         """定数であればTrue"""
@@ -393,6 +397,7 @@ class BasTokenGen:
         self.lineno = 0
         self.baslineno = 0
         self.cached = []
+        self.nocomment = False
 
     def getline(self):
         """必要があれば1行読み込む"""
@@ -412,6 +417,7 @@ class BasTokenGen:
             self.curline = self.line
             self.lineno += 1
             self.baslineno = 0
+            self.firsttoken = True
             # 行番号があれば取得する
             if m := re.match(r'[ \t]*(\d+)', self.line):
                 self.baslineno = int(m.group(1))
@@ -439,15 +445,23 @@ class BasTokenGen:
         if not self.getline():
             return BasToken.keyword(BasKeyword.EOF)
         # 行末
-        elif self.line == '\n':
+        if self.line == '\n':
             self.line = ''
             return BasToken.keyword(BasKeyword.EOL)
         # コメント
-        elif self.line[:2] == '/*':
-            self.line = ''
-            return BasToken.keyword(BasKeyword.EOL)
+        if self.line[:2] == '/*':
+            if self.firsttoken and not self.nocomment:
+                comment = self.line.replace('*/', '').rstrip('\n') + '*/'
+                self.line = '\n'    # コメントの後に改行を挿入する
+                return BasToken.comment(comment)
+            else:       # 行頭以外と関数間のコメントは削除する
+                self.line = ''
+                return BasToken.keyword(BasKeyword.EOL)
+
+        self.firsttoken = False
+
         # 文字列 "~"
-        elif m := ismatch(r'"[^"\n]*("?)'):
+        if m := ismatch(r'"[^"\n]*("?)'):
             r = m.group(0)
             # 引用符を閉じずに行が終わっていたら補う
             r += '"' if m.group(1) != '"' else ''
@@ -617,6 +631,7 @@ class Bas2C:
             if l in self.label:
                 return f'L{l:06d}:\n'
             elif l in self.subr:
+                self.t.nocomment = False
                 r = self.nestclose('S')
                 r += '\n/***************************/\n'
                 self.indentcnt += 1
@@ -822,6 +837,7 @@ class Bas2C:
                 return f'S{l:06d}();\n'
 
             elif s.value == BasKeyword.FUNC:
+                self.t.nocomment = False
                 # 関数の戻り値型を取得する(指定されていなければint型とする)
                 fty = BasVariable.INT
                 if t := self.checkvartype():
@@ -874,6 +890,7 @@ class Bas2C:
             elif s.value == BasKeyword.ENDFUNC:
                 self.nsp.setlocal(None)
                 self.nestout('F')
+                self.t.nocomment = True
                 return '}\n'
 
             elif s.value == BasKeyword.RETURN:
@@ -915,6 +932,7 @@ class Bas2C:
             elif s.value == BasKeyword.END:
                 if self.nest == 'M':
                     self.nest = 'm'
+                self.t.nocomment = True
                 return self.b_exit + '(0);\n'
 
             elif r := self.exfncall(s.value):
@@ -944,6 +962,9 @@ class Bas2C:
                     else:
                         self.nestin('E' if self.checksymbol('{') else 'e')
                         return r + '} else {\n'
+
+        elif s := self.checktype(BasToken.COMMENT):
+            return s.value
 
         elif s := self.lvalue(None, True):                  # 左辺値 or 関数名の場合
             if s.istype(BasToken.FUNCTION):
@@ -1046,6 +1067,8 @@ class Bas2C:
                     n += a.value
                 elif a := self.checkkeyword(BasKeyword.EOL):
                     n += '\n'
+                elif a := self.checktype(BasToken.COMMENT):
+                    n += a.value
                 else:
                     n += self.expect(self.expr()).value
             return n
