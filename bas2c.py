@@ -660,11 +660,8 @@ class Bas2C:
         elif s := self.checktype(BasToken.KEYWORD):
             if s.value == BasKeyword.EOL:
                 if self.nest != '':
-                    if self.nest[0] == 'i':     # then節が改行で終了する場合
-                        self.nestout('i')
-                        return '}\n'
-                    elif self.nest[0] == 'e':   # else節が改行で終了する場合
-                        self.nestout('e')
+                    if self.nest[0] in 'ie':    # then/else節が改行で終了する場合
+                        self.nestout(self.nest[0])
                         return '}\n'
                 return ''
 
@@ -870,7 +867,7 @@ class Bas2C:
                         # もう引数がないならループを抜ける
                         if not self.checksymbol(','):
                             break
-                        arg += ','
+                        arg += ', '
                     self.nextsymbol(')')
 
                 # 関数名はグローバルで登録する
@@ -1172,7 +1169,7 @@ class Bas2C:
         i = 0
         while a != '':
             if a[0] == ',':
-                arg += ','
+                arg += ', '
                 a = a[1:]
                 continue
             if a[0] == '#':                     # 1つ前の引数のサイズ
@@ -1189,7 +1186,7 @@ class Bas2C:
                 arg += f'strtmp{self.strtmp}'
                 self.strtmp += 1
             elif a[0] == ',':
-                arg += ','
+                arg += ', '
             a = a[1:]
         return BasToken(rty, f'{fn}({arg})')
 
