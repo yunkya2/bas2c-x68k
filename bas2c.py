@@ -609,7 +609,8 @@ class Bas2C:
     def nestclose(self, next=''):
         """必要なら関数末尾の括弧を閉じる"""
         if self.nest != '' and self.nest in 'MmSF':
-            r = self.b_exit + '(0);\n' if self.nest != 'm' else ''
+            # main が終了しないまま次の関数定義が始まる場合は b_exit(0) を呼ぶ
+            r = self.indentout() + self.b_exit + '(0);\n' if self.nest == 'M' else ''
             self.nest = next
             self.indentcnt -= 1
             return r + '}\n'
