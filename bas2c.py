@@ -398,21 +398,34 @@ class BasTokenGen:
         self.baslineno = 0
         self.cached = []
         self.nocomment = False
+        self.ccode = ''
 
     def getline(self):
         """必要があれば1行読み込む"""
-        if len(self.line) == 0:
+        def readline():
             if self.fh:
-                self.line = self.fh.readline()
+                return self.fh.readline()
             else:
                 if self.fp < len(self.filebuf):
                     n = self.filebuf.find('\n', self.fp)
                     if n < 0:
-                        self.line = self.filebuf[self.fp:]
+                        line = self.filebuf[self.fp:]
                         self.fp = len(self.filebuf)
                     else:
-                        self.line = self.filebuf[self.fp:n + 1]
+                        line = self.filebuf[self.fp:n + 1]
                         self.fp = n + 1
+                    return line
+            return ''
+
+        if len(self.line) == 0:
+            self.line = readline()
+            if self.line.startswith('#c'):
+                while l := readline():
+                    if l.startswith('#endc'):
+                        break
+                    self.ccode += l
+                self.line = readline()
+
             self.preline = self.line
             self.curline = self.line
             self.lineno += 1
@@ -430,6 +443,12 @@ class BasTokenGen:
         """BASICの行番号を取得する"""
         r = self.baslineno
         self.baslineno = 0      # 取得できるのは一度だけ
+        return r
+
+    def getccode(self):
+        """#c～#endcのコードを取得する"""
+        r = self.ccode
+        self.ccode = ''
         return r
 
     def get(self):
@@ -1376,6 +1395,7 @@ class Bas2C:
             try:
                 self.indentinit()
                 s = self.statement()
+                fo.write(self.t.getccode())
                 fo.write(self.genlabel())
                 if s == None:
                     fo.write(self.nestclose(''))
