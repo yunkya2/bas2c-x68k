@@ -372,7 +372,8 @@ class BasToken:
 
 class BasTokenGen:
     """ソースコードからトークンを生成するクラス"""
-    def __init__(self, fh=sys.stdin):
+    def __init__(self, fh=sys.stdin, cindent=-1):
+        self.cindent = cindent
         if fh == sys.stdin:
             # 標準入力は巻き戻せないので一度すべてを読み込む
             self.filebuf = ''
@@ -403,8 +404,9 @@ class BasTokenGen:
     def getline(self):
         """必要があれば1行読み込む"""
         def readline():
+            line = ''
             if self.fh:
-                return self.fh.readline()
+                line = self.fh.readline()
             else:
                 if self.fp < len(self.filebuf):
                     n = self.filebuf.find('\n', self.fp)
@@ -414,8 +416,11 @@ class BasTokenGen:
                     else:
                         line = self.filebuf[self.fp:n + 1]
                         self.fp = n + 1
-                    return line
-            return ''
+            self.lineno += 1
+            line = line.rstrip('\x1a')
+            if self.cindent >= 0 and len(line) > 0:
+                self.ccode += '\t' * self.cindent + '/*===' + self.getbascmnline(line) + '===*/\n'
+            return line
 
         if len(self.line) == 0:
             self.line = readline()
@@ -428,7 +433,6 @@ class BasTokenGen:
 
             self.preline = self.line
             self.curline = self.line
-            self.lineno += 1
             self.baslineno = 0
             self.firsttoken = True
             # 行番号があれば取得する
@@ -436,7 +440,7 @@ class BasTokenGen:
                 self.baslineno = int(m.group(1))
                 self.line = self.line[m.end():]
         # 行頭の空白などは読み飛ばす
-        self.line = self.line.lstrip(' \t\r\x1a')
+        self.line = self.line.lstrip(' \t\r')
         return self.line
 
     def getbaslineno(self):
@@ -450,6 +454,10 @@ class BasTokenGen:
         r = self.ccode
         self.ccode = ''
         return r
+
+    def getbascmnline(self, line):
+        """コメント挿入用にBASICの行を取得する"""
+        return line.replace('/*','').replace('*/','').rstrip('\n')
 
     def get(self):
         """トークンを取得する"""
@@ -470,7 +478,7 @@ class BasTokenGen:
         # コメント
         if self.line[:2] == '/*':
             if self.firsttoken and not self.nocomment:
-                comment = self.line.replace('*/', '').rstrip('\n') + '*/'
+                comment = '/*' + self.getbascmnline(self.line) + '*/'
                 self.line = '\n'    # コメントの後に改行を挿入する
                 return BasToken.comment(comment)
             else:       # 行頭以外と関数間のコメントは削除する
@@ -540,11 +548,12 @@ class Bas2C:
     DEBUG       = (1 << 0)      # デバッグモード
     UNDEFERR    = (1 << 1)      # 未定義関数呼び出しをエラーにする
     NOBINIT     = (1 << 2)      # プログラム開始/終了時にb_init(),b_exit()を呼ばない
+    BASCOMMENT  = (1 << 3)      # BASICの各行をコメント行として挿入する
 
-    def __init__(self, fh, flag=0):
+    def __init__(self, fh, flag=0, cindent=0):
         self.flag = flag
         self.fh = fh
-        self.t = BasTokenGen(fh)
+        self.t = BasTokenGen(fh, cindent if flag & self.BASCOMMENT else -1)
         self.label = []
         self.subr = []
         self.nsp = BasNameSpace()
@@ -1439,6 +1448,7 @@ def usage():
 
 if __name__ == '__main__':
     flag = 0
+    cindent = 0
     finame = None
     foname = None
     focode = None
@@ -1453,6 +1463,12 @@ if __name__ == '__main__':
                 flag |= Bas2C.NOBINIT
             elif sys.argv[i] == '-s':
                 focode = 'cp932'
+            elif sys.argv[i][1] == 'c':
+                flag |= Bas2C.BASCOMMENT
+                try:
+                    cindent = int(sys.argv[i][2:])
+                except:
+                    cindent = 7
             elif sys.argv[i] == '-o':
                 i += 1
                 foname = sys.argv[i]
@@ -1472,7 +1488,7 @@ if __name__ == '__main__':
     fo = open(foname, 'w', encoding=focode) if foname and foname != '-' else sys.stdout
 
     readdef()
-    b = Bas2C(fh, flag)
+    b = Bas2C(fh, flag, cindent)
     b.start(fo)
 
     sys.exit(0)
