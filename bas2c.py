@@ -1451,7 +1451,7 @@ def fileencoding(fname):
     return None
 
 def usage():
-    print(f'usage: {sys.argv[0]} [-D][-u][-s] [-o output.c] input.bas')
+    print(f'usage: {sys.argv[0]} [-Dunsv][-c[tabs]][-o output.c] input.bas')
     sys.exit(1)
 
 if __name__ == '__main__':
