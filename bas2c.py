@@ -372,8 +372,9 @@ class BasToken:
 
 class BasTokenGen:
     """ソースコードからトークンを生成するクラス"""
-    def __init__(self, fh=sys.stdin, cindent=-1):
+    def __init__(self, fh=sys.stdin, cindent=-1, verbose=False):
         self.cindent = cindent
+        self.verbose = verbose
         if fh == sys.stdin:
             # 標準入力は巻き戻せないので一度すべてを読み込む
             self.filebuf = ''
@@ -385,6 +386,9 @@ class BasTokenGen:
         else:
             self.fh = fh
         self.rewind()
+
+    def setpass(self, bpass):
+        self.bpass = bpass
 
     def rewind(self):
         """ファイルを巻き戻す"""
@@ -420,6 +424,8 @@ class BasTokenGen:
             line = line.rstrip('\x1a')
             if self.cindent >= 0 and len(line) > 0:
                 self.ccode += '\t' * self.cindent + '/*===' + self.getbascmnline(line) + '===*/\n'
+            if self.verbose and self.bpass == 2:
+                print(line, end='')
             return line
 
         if len(self.line) == 0:
@@ -549,11 +555,12 @@ class Bas2C:
     UNDEFERR    = (1 << 1)      # 未定義関数呼び出しをエラーにする
     NOBINIT     = (1 << 2)      # プログラム開始/終了時にb_init(),b_exit()を呼ばない
     BASCOMMENT  = (1 << 3)      # BASICの各行をコメント行として挿入する
+    VERBOSE     = (1 << 4)      # 変換中の行を表示する
 
     def __init__(self, fh, flag=0, cindent=0):
         self.flag = flag
         self.fh = fh
-        self.t = BasTokenGen(fh, cindent if flag & self.BASCOMMENT else -1)
+        self.t = BasTokenGen(fh, cindent if flag & self.BASCOMMENT else -1, flag & self.VERBOSE)
         self.label = []
         self.subr = []
         self.nsp = BasNameSpace()
@@ -572,6 +579,7 @@ class Bas2C:
         self.initmp = 0
         self.nest = 'M'
         self.indentcnt = 0
+        self.t.setpass(bpass)
         self.t.rewind()
 
     def expect(self, v):
@@ -1461,6 +1469,8 @@ if __name__ == '__main__':
                 flag |= Bas2C.UNDEFERR
             elif sys.argv[i] == '-n':
                 flag |= Bas2C.NOBINIT
+            elif sys.argv[i] == '-v':
+                flag |= Bas2C.VERBOSE
             elif sys.argv[i] == '-s':
                 focode = 'cp932'
             elif sys.argv[i][1] == 'c':
