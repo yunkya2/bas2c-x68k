@@ -556,6 +556,7 @@ class Bas2C:
     NOBINIT     = (1 << 2)      # プログラム開始/終了時にb_init(),b_exit()を呼ばない
     BASCOMMENT  = (1 << 3)      # BASICの各行をコメント行として挿入する
     VERBOSE     = (1 << 4)      # 変換中の行を表示する
+    BCCOMPAT    = (1 << 5)      # 演算子の優先順位や論理演算の結果を変換しない(BC.Xコンパチ)
 
     def __init__(self, fh, flag=0, cindent=0):
         self.flag = flag
@@ -1249,7 +1250,11 @@ class Bas2C:
             while self.checkkeyword(BasKeyword.XOR):
                 a = self.expect(opor(self))
                 self.expect(r.resulttype(a))
-                r = BasToken.int(f'((int){r.value} ^ (int){a.value})')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'((int){r.value} ^ (int){a.value})'
+                else:
+                    v = f'{r.value} ^ {a.value}'
+                r = BasToken.int(v)
             return r
 
         def opor(self):
@@ -1258,7 +1263,11 @@ class Bas2C:
             while self.checkkeyword(BasKeyword.OR):
                 a = self.expect(opand(self))
                 self.expect(r.resulttype(a))
-                r = BasToken.int(f'((int){r.value} | (int){a.value})')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'((int){r.value} | (int){a.value})'
+                else:
+                    v = f'{r.value} | {a.value}'
+                r = BasToken.int(v)
             return r
 
         def opand(self):
@@ -1267,14 +1276,21 @@ class Bas2C:
             while self.checkkeyword(BasKeyword.AND):
                 a = self.expect(opnot(self))
                 self.expect(r.resulttype(a))
-                r = BasToken.int(f'((int){r.value} & (int){a.value})')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'((int){r.value} & (int){a.value})'
+                else:
+                    v = f'{r.value} & {a.value}'
+                r = BasToken.int(v)
             return r
 
         def opnot(self):
             if self.checkkeyword(BasKeyword.NOT):
                 r = self.expect(opnot(self))
                 self.expect(r.resulttype())
-                return BasToken.int(f'(~((int){r.value}))')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    return BasToken.int(f'(~((int){r.value}))')
+                else:
+                    return BasToken.int(f'!{r.value}')
             return cmp(self)
 
         def cmp(self):
@@ -1290,9 +1306,14 @@ class Bas2C:
                 a = self.expect(shrshl(self))
                 if r.istype(BasToken.STR):
                     self.expect(a.istype(BasToken.STR))
-                    r = BasToken.int(f'(b_strcmp({r.value},0x{map[p.value][1]:x},{a.value})?-1:0)')
+                    v = f'b_strcmp({r.value},0x{map[p.value][1]:x},{a.value})'
+                    if not (self.flag & Bas2C.BCCOMPAT):
+                        v = f'(({v})?-1:0)'
                 else:
-                    r = BasToken.int(f'-({r.value} {map[p.value][0]} {a.value})')
+                    v = f'{r.value} {map[p.value][0]} {a.value}'
+                    if not (self.flag & Bas2C.BCCOMPAT):
+                        v = f'-({v})'
+                r = BasToken.int(v)
             return r
 
         def shrshl(self):
@@ -1302,7 +1323,11 @@ class Bas2C:
             while p := checkops(self, map):
                 a = self.expect(addsub(self))
                 self.expect(r.resulttype(a))
-                r = BasToken.int(f'((int){r.value} {map[p.value]} (int){a.value})')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'((int){r.value} {map[p.value]} (int){a.value})'
+                else:
+                    v = f'{r.value} {map[p.value]} {a.value}'
+                r = BasToken.int(v)
             return r
 
         def addsub(self):
@@ -1325,7 +1350,10 @@ class Bas2C:
                 while p := checkops(self, map):
                     a = self.expect(mod(self))
                     rty = self.expect(r.resulttype(a))
-                    r = BasToken(rty, f'({r.value} {map[p.value]} {a.value})')
+                    v = f'{r.value} {map[p.value]} {a.value}'
+                    if not (self.flag & Bas2C.BCCOMPAT):
+                        v = f'({v})'
+                    r = BasToken(rty, v)
                 return r
 
         def mod(self):
@@ -1334,7 +1362,11 @@ class Bas2C:
             while self.checkkeyword(BasKeyword.MOD):
                 a = self.expect(yen(self))
                 self.expect(r.resulttype(a))
-                r = BasToken.int(f'((int){r.value} % (int){a.value})')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'((int){r.value} % (int){a.value})'
+                else:
+                    v = f'{r.value} % {a.value}'
+                r = BasToken.int(v)
             return r
 
         def yen(self):
@@ -1343,7 +1375,11 @@ class Bas2C:
             while self.checkkeyword(BasKeyword.YEN):
                 a = self.expect(muldiv(self))
                 self.expect(r.resulttype(a))
-                r = BasToken.int(f'((int){r.value} / (int){a.value})')
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'((int){r.value} / (int){a.value})'
+                else:
+                    v = f'{r.value} / {a.value}'
+                r = BasToken.int(v)
             return r
 
         def muldiv(self):
@@ -1353,7 +1389,10 @@ class Bas2C:
             while p := checkops(self, map):
                 a = self.expect(posneg(self))
                 rty = self.expect(r.resulttype(a))
-                r = BasToken(rty, f'({r.value} {map[p.value]} {a.value})')
+                v = f'{r.value} {map[p.value]} {a.value}'
+                if not (self.flag & Bas2C.BCCOMPAT):
+                    v = f'({v})'
+                r = BasToken(rty, v)
             return r
 
         def posneg(self):
@@ -1456,7 +1495,7 @@ def fileencoding(fname):
     return None
 
 def usage():
-    print(f'usage: {sys.argv[0]} [-Dunsv][-c[tabs]][-o output.c] input.bas')
+    print(f'usage: {sys.argv[0]} [-Dunbsv][-c[tabs]][-o output.c] input.bas')
     sys.exit(1)
 
 if __name__ == '__main__':
@@ -1476,6 +1515,8 @@ if __name__ == '__main__':
                 flag |= Bas2C.NOBINIT
             elif sys.argv[i] == '-v':
                 flag |= Bas2C.VERBOSE
+            elif sys.argv[i] == '-b':
+                flag |= Bas2C.BCCOMPAT
             elif sys.argv[i] == '-s':
                 focode = 'cp932'
             elif sys.argv[i][1] == 'c':
