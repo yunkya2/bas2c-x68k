@@ -162,7 +162,18 @@ class BasKeyword:
             return (w, word[2:])
         if w := cls.keywordop.get(word[:1], None):
             return (w, word[1:])
-        return None        
+        return None
+
+    @classmethod
+    def getkeyword(cls, val):
+        """valから予約語を得る"""
+        for k, v in cls.keyword.items():
+            if v == val:
+                return k
+        for k, v in cls.keywordop.items():
+            if v == val:
+                return k
+        return None
 
     # 組込/外部関数定義情報
     exfnlist = {}
@@ -182,6 +193,14 @@ class BasKeyword:
             cls.keyword[m.group(2)] = w
             cls.exfnlist[w] = BasExFunc(m.group(1),m.group(2),m.group(3),m.group(4),m.group(5),grp)
             w += 1
+
+class BasException1(Exception):
+    """pass 1で発生するエラー"""
+    pass
+
+class BasException2(Exception):
+    """pass 2で発生するエラー"""
+    pass
 
 class BasExFunc:
     """組込/外部関数定義情報を保持するクラス"""
@@ -261,6 +280,7 @@ class BasNameSpace:
 
     def setpass(self, bpass):
         self.bpass = bpass
+        self.curlocal = None
 
     def setlocal(self, name):
         """ローカル名前空間を設定する"""
@@ -285,7 +305,7 @@ class BasNameSpace:
         # 変数定義を行うのはpass1のみ        
         if self.bpass == 1:
             if gls.get(name, None):
-                raise Exception('変数の多重定義')
+                raise BasException1(f'変数 {name} が多重定義されています')
             gls[name] = BasVariable(name, type, arg, init, func, funcarg)
         return gls[name]
 
@@ -397,13 +417,15 @@ class BasTokenGen:
         else:
             self.fp = 0
         self.line = ''
-        self.preline = ''
         self.curline = ''
         self.lineno = 0
         self.baslineno = 0
+        self.golineno = 0
         self.cached = []
         self.nocomment = False
         self.ccode = ''
+        self.prelen = 0
+        self.curlen = 0
 
     def getline(self):
         """必要があれば1行読み込む"""
@@ -421,6 +443,7 @@ class BasTokenGen:
                         line = self.filebuf[self.fp:n + 1]
                         self.fp = n + 1
             self.lineno += 1
+            self.baslineno += 1
             line = line.rstrip('\x1a')
             if self.cindent >= 0 and len(line) > 0:
                 self.ccode += '\t' * self.cindent + '/*===' + self.getbascmnline(line) + '===*/\n'
@@ -437,23 +460,29 @@ class BasTokenGen:
                     self.ccode += l
                 self.line = readline()
 
-            self.preline = self.line
             self.curline = self.line
-            self.baslineno = 0
+            self.golineno = 0
             self.firsttoken = True
             # 行番号があれば取得する
             if m := re.match(r'[ \t]*(\d+)', self.line):
-                self.baslineno = int(m.group(1))
+                self.golineno = int(m.group(1))
+                self.baslineno = self.golineno
                 self.line = self.line[m.end():]
         # 行頭の空白などは読み飛ばす
         self.line = self.line.lstrip(' \t\r')
+        self.prelen = len(self.line)
+        self.curlen = len(self.line)
         return self.line
 
-    def getbaslineno(self):
-        """BASICの行番号を取得する"""
-        r = self.baslineno
-        self.baslineno = 0      # 取得できるのは一度だけ
+    def getgolineno(self):
+        """GOTO/GOSUB用の行番号を取得する"""
+        r = self.golineno
+        self.golineno = 0      # 取得できるのは一度だけ
         return r
+
+    def getlineno(self):
+        """エラー表示用の行番号を取得する"""
+        return f'{self.lineno:d} ({self.baslineno:d})'
 
     def getccode(self):
         """#c～#endcのコードを取得する"""
@@ -538,14 +567,15 @@ class BasTokenGen:
 
     def fetch(self):
         """トークンを取得する (先読みされていたものがあればそれを返す)"""
-        self.preline = self.line
-        if self.cached:
-            return self.cached.pop()
-        return self.get()
+        self.prelen = self.curlen
+        self.curlen = len(self.line)
+        r = self.cached.pop() if self.cached else self.get()
+        return r
 
     def unfetch(self, t):
         """一度読んだトークンを戻す"""
         self.cached.append(t)
+        self.curlen = self.prelen
         return None
 
 ##############################################################################
@@ -583,10 +613,10 @@ class Bas2C:
         self.t.setpass(bpass)
         self.t.rewind()
 
-    def expect(self, v):
+    def expect(self, v, err='構文に誤りがあります'):
         """実行結果がNoneでないことを確認する"""
         if not v:
-            raise Exception('構文エラー')
+            raise BasException2(err)
         return v
 
     def nexttype(self, t):
@@ -594,10 +624,10 @@ class Bas2C:
         return self.expect(self.t.fetch().istype(t))
     def nextkeyword(self, k):
         """次のトークンが予約語kであることを確認する"""
-        return self.expect(self.t.fetch().iskeyword(k))
+        return self.expect(self.t.fetch().iskeyword(k), f'\'{BasKeyword.getkeyword(k)}\' がありません')
     def nextsymbol(self, s):
         """次のトークンがシンボルsであることを確認する"""
-        return self.expect(self.t.fetch().issymbol(s))
+        return self.expect(self.t.fetch().issymbol(s), f'\'{s}\' がありません')
 
     def peek(self):
         """次のトークンを先読みする"""
@@ -639,21 +669,42 @@ class Bas2C:
 
     def nestout(self, type):
         """ネストを浅くする"""
-        self.expect(self.nest[0] == type)
+        self.expect(self.nest[0] == type, self.nesterrmsg(type))
         self.nest = self.nest[1:]
         self.indentcnt -= 1
 
-    def nestclose(self, next=''):
+    def nestclose(self):
         """必要なら関数末尾の括弧を閉じる"""
-        if self.nest != '' and self.nest in 'MmSF':
-            # main が終了しないまま次の関数定義が始まる場合は b_exit(0) を呼ぶ
-            r = self.indentout() + self.b_exit + '(0);\n' if self.nest == 'M' else ''
-            self.nest = next
-            self.indentcnt -= 1
+        if self.nest == 'M':
+            # ENDを実行せずにmain関数が終了したら b_exit(0) を呼ぶ
+            r = self.indentout() + self.b_exit + '(0);\n'
+            self.nestout('M')
             return r + '}\n'
-        self.expect(self.nest == '')
-        self.nest = next
-        return ''
+        elif self.nest == 'S':
+            # サブルーチンの括弧を閉じる
+            self.nestout('S')
+            return '}\n'
+        else:
+            # 関数定義が閉じていることを確認する
+            nest = self.nest[:1]
+            self.nest = ''
+            self.expect(nest == '', self.nesterrmsg(nest))
+            return ''
+
+    def nesterrmsg(self, type):
+        """ネストのエラーメッセージを返す"""
+        nestname = {
+            'f' : 'for - next',
+            'w' : 'while - endwhile',
+            'r' : 'repeat - until',
+            's' : 'switch - endswitch',
+            'F' : 'func - endfunc',
+        }
+        if type in 'iIeE':
+            return 'if - then - else の対応に誤りがあります'
+        if type in nestname:
+            return f'{nestname[type]} の対応に誤りがあります'
+        return 'ネストの対応に誤りがあります'
 
     def indentinit(self):
         """インデント量を初期化する"""
@@ -665,12 +716,13 @@ class Bas2C:
 
     def genlabel(self):
         """必要ならGOTO飛び先のラベル定義、GOSUB飛び先の関数定義を出力する"""
-        if l := self.t.getbaslineno():
+        if l := self.t.getgolineno():
             if l in self.label:
                 return f'L{l:06d}:\n'
             elif l in self.subr:
                 self.t.nocomment = False
-                r = self.nestclose('S')
+                r = self.nestclose()
+                self.nestin('S')
                 r += '\n/***************************/\n'
                 self.indentcnt += 1
                 return r + f'void S{l:06d}(void)\n' + '{\n'
@@ -713,8 +765,8 @@ class Bas2C:
                 r = ''
                 crlf = True
                 if self.checkkeyword(BasKeyword.USING):
-                    fmt = self.expect(self.expr())
-                    self.expect(fmt.istype(BasToken.STR))
+                    fmt = self.expect(self.expr(), 'using の書式文字列がありません')
+                    self.expect(fmt.istype(BasToken.STR), 'using の書式文字列がありません')
                     self.nextsymbol(';')
                     r = f'b_s{lp}print(using(strtmp{self.strtmp},{fmt.value}'
                     self.strtmp += 1
@@ -807,7 +859,7 @@ class Bas2C:
                     self.nextkeyword(BasKeyword.THEN)
                     self.nestin('I' if self.checksymbol('{') else 'i')
                     return r + '} else ' + f'if ({x.value}) ' + '{\n'
-                else:                                   # else で終了する場合x
+                else:                                   # else で終了する場合
                     self.nestin('E' if self.checksymbol('{') else 'e')
                     return r + '} else {\n'
 
@@ -910,7 +962,8 @@ class Bas2C:
                 # 関数名はグローバルで登録する
                 v = self.nsp.new(func, fty, arg, func=True, forceglobl=True)
 
-                r = self.nestclose('F')
+                r = self.nestclose()
+                self.nestin('F')
                 r += '\n/***************************/\n'
                 r += f'{v.typename(True)} {func}({arg})\n' + '{\n'
                 if self.bpass != 1:
@@ -937,7 +990,12 @@ class Bas2C:
                     else:
                         return 'return 0;\n'
                 else:
-                    return 'return;\n'
+                    r = ''
+                    if self.nest == 'S':            # サブルーチンを閉じる
+                        self.nestout('S')
+                        self.t.nocomment = True
+                        r = '}\n'
+                    return 'return;\n' + r
 
             elif s.value == BasKeyword.BREAK:
                 self.checksymbol(';')
@@ -965,15 +1023,17 @@ class Bas2C:
                 return f'/* error {x.value} */\n'
 
             elif s.value == BasKeyword.END:
-                if self.nest == 'M':
-                    self.nest = 'm'
-                self.t.nocomment = True
-                return self.b_exit + '(0);\n'
+                r = ''
+                if self.nest == 'M':                # main関数を閉じる
+                    self.nestout('M')
+                    self.t.nocomment = True
+                    r = '}\n'
+                return self.b_exit + '(0);\n' + r
 
             elif r := self.exfncall(s.value):
                 return r.value + ';\n'
             else:
-                raise Exception('構文エラー')
+                self.expect(None)
 
         elif s := self.checktype(BasToken.SYMBOL):
             if s.value == '}':                  # if then/else節が終了する場合
@@ -1428,14 +1488,16 @@ class Bas2C:
 
 ##############################################################################
 
-    def start(self, fo=sys.stdout):
+    def start(self, fo=sys.stdout, finame='<stdin>'):
         self.setpass(1)     # pass 1
         while True:
             try:
                 if self.statement() == None:
                     break
-            except Exception as e:
-                pass                    # 1パス目のエラーは無視
+            except BasException1 as e:
+                self.error(e, finame)
+            except BasException2:
+                pass
 
         self.setpass(2)     # pass 2
         fo.write('#include <basic0.h>\n')
@@ -1459,19 +1521,24 @@ class Bas2C:
                 fo.write(self.t.getccode())
                 fo.write(self.genlabel())
                 if s == None:
-                    fo.write(self.nestclose(''))
                     break
                 if s:
                     for l in s.splitlines():
                         fo.write(self.indentout() + l + '\n')
-            except Exception as e:
-                print(f'Error: {e} in line {self.t.lineno}({self.t.baslineno})')
-                print(self.t.curline,end='')
-                pos = len(self.t.curline) - len(self.t.preline) 
-                print(' ' * pos + '^')
-                if self.flag & Bas2C.DEBUG:
-                    raise
-                break
+            except BasException1:
+                pass
+            except BasException2 as e:
+                self.error(e, finame)
+        try:
+            fo.write(self.nestclose())
+        except BasException2 as e:
+            self.error(e, finame)
+
+    def error(self, e, finame):
+        print(f'{finame:s}:{self.t.getlineno()}\t: error: {e}')
+        if self.t.curline:
+            print(self.t.curline,end='')
+            print(' ' * (len(self.t.curline) - self.t.prelen) + '^')
 
 ##############################################################################
 
@@ -1545,6 +1612,6 @@ if __name__ == '__main__':
 
     readdef()
     b = Bas2C(fh, flag, cindent)
-    b.start(fo)
+    b.start(fo, finame if finame else '<stdin>')
 
     sys.exit(0)
