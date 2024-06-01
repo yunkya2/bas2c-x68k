@@ -660,7 +660,7 @@ class Bas2C:
         """グローバル変数、関数の定義を出力する"""
         r = self.nsp.definition()
         for l in self.subr:         # サブルーチンのプロトタイプを出力する
-            r += f'void S{l:05d}(void);\n'
+            r += f'void S{l:06d}(void);\n'
         return r
 
     def nestin(self, type):
@@ -1110,11 +1110,12 @@ class Bas2C:
                 self.nextsymbol(')')
                 sub += ']'
                 ty -= BasVariable.DIM
-        if self.checksymbol('['):
-            a = self.expect(self.expr())
-            self.nextsymbol(']')
-            sub += '[' + a.value + ']'
-            ty = BasVariable.CHAR
+        if ty == BasVariable.STR:
+            if self.checksymbol('['):
+                a = self.expect(self.expr())
+                self.nextsymbol(']')
+                sub += '[' + a.value + ']'
+                ty = BasVariable.CHAR
         if ty >= BasVariable.DIM and not arrayok:
             return None         # 配列全体は返せない
         return BasToken(ty, f'{v.name}{sub}')
