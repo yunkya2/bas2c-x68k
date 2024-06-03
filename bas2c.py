@@ -820,13 +820,13 @@ class Bas2C:
 
                 while True:
                     a = self.expect(self.lvalue())
-                    if a.istype(BasToken.STR):
-                        at = f'sizeof({a.value})'
-                        av = a.value
+                    if a.type == BasVariable.STR:
+                        at = f'sizeof({a.name})'
+                        av = a.name
                     else:
-                        map = {BasToken.INT:0x204, BasToken.CHAR:0x201, BasToken.FLOAT:0x208}
+                        map = {BasVariable.INT:0x204, BasVariable.CHAR:0x201, BasVariable.FLOAT:0x208}
                         at = f'0x{map[a.type]:x}'
-                        av = '&'+a.value
+                        av = '&'+a.name
                     r += f',{at},{av}'
                     if not self.checksymbol(','):
                         break
@@ -839,8 +839,8 @@ class Bas2C:
                     self.nextsymbol(';')
                     r += f'b_sprint({p.value});\n'
                 a = self.expect(self.lvalue())
-                self.expect(a.istype(BasToken.STR))
-                return r + f'b_linput({a.value},sizeof({a.value}));\n'
+                self.expect(a.type == BasVariable.STR)
+                return r + f'b_linput({a.name},sizeof({a.name}));\n'
 
             elif s.value == BasKeyword.IF:
                 x = self.expect(self.expr())
@@ -864,13 +864,13 @@ class Bas2C:
                     return r + '} else {\n'
 
             elif s.value == BasKeyword.FOR:
-                v = self.expect(self.lvalue())
+                v = self.expect(self.lvalue(isfor=True))
                 self.nextkeyword(BasKeyword.EQ)
                 f = self.expect(self.expr())
                 self.nextkeyword(BasKeyword.TO)
                 t = self.expect(self.expr())
                 self.nestin('f')
-                return f'for ({v.value} = {f.value}; {v.value} <= {t.value}; {v.value}++) ' + '{\n'
+                return f'for ({v.name} = {f.value}; {v.name} <= {t.value}; {v.name}++) ' + '{\n'
 
             elif s.value == BasKeyword.NEXT:
                 self.nestout('f')
@@ -1061,45 +1061,51 @@ class Bas2C:
         elif s := self.checktype(BasToken.COMMENT):
             return s.value
 
-        elif s := self.lvalue(None, True):                  # 左辺値 or 関数名の場合
-            if s.istype(BasToken.FUNCTION):
-                return self.fncall(s.value).value + ';\n'   # 関数呼び出し
-            self.nextkeyword(BasKeyword.EQ)
-            x = self.initvar(s.type)                        # 代入する値を得る
-            if s.type >= BasVariable.DIM:                   # 配列なら一時変数の内容をコピー
-                v = self.nsp.find(s.value)
-                # 一時変数を名前空間に登録する
-                self.nsp.new(f'_initmp{self.initmp:04d}', v.type + BasVariable.STATICCONST, v.arg, x)
-                r = f'memcpy({s.value}, _initmp{self.initmp:04d}, sizeof({s.value}));\n'
-                self.initmp += 1
-                return r
-            if s.istype(BasToken.STR):                      # 文字列ならb_strncpy()
-                return f'b_strncpy(sizeof({s.value}),{s.value},{x});\n'
-            else:                                           # 単純変数への代入
-                return f'{s.value} = {x};\n'
+        else:
+            r = self.expect(self.t.fetch())
+            if s := self.lvalue(r, islet=True):             # 左辺値
+                self.nextkeyword(BasKeyword.EQ)
+                x = self.initvar(s.type)                    # 代入する値を得る
+                if s.type >= BasVariable.DIM:               # 配列なら一時変数の内容をコピー
+                    v = self.nsp.find(s.name)
+                    # 一時変数を名前空間に登録する
+                    self.nsp.new(f'_initmp{self.initmp:04d}', v.type + BasVariable.STATICCONST, v.arg, x)
+                    r = f'memcpy({s.name}, _initmp{self.initmp:04d}, sizeof({s.name}));\n'
+                    self.initmp += 1
+                    return r
+                if s.type == BasVariable.STR:               # 文字列ならb_strncpy()
+                    return f'b_strncpy(sizeof({s.name}),{s.name},{x});\n'
+                else:                                       # 単純変数への代入
+                    return f'{s.name} = {x};\n'
+            else:
+                s = self.expect(self.fncall(r))             # 関数呼び出し
+                return s.value + ';\n'
 
         self.expect(None)
 
 ##############################################################################
 
-    def lvalue(self, var=None, arrayok=False):
+    def lvalue(self, var=None, islet=False, isfor=False):
         """左辺値(代入可能な変数/配列)を得る"""
-        var = self.expect(self.t.fetch() if not var else var)
+        var = self.expect(self.t.fetch()) if not var else var
         if not var.istype(BasToken.VARIABLE):
             return None
         v = self.nsp.find(var.value)
         if self.peek().issymbol('('):               # 配列または関数呼び出し
             if (not v) or (not v.isarray()):
-                return BasToken.function(var.value) # 関数呼び出し
+                return None                         # 関数呼び出し
         else:                                       # 単純変数
             if not v:
-                # 未定義変数への代入時はint型のグローバル変数として定義する
-                self.nsp.new(var.value, BasVariable.INT, forceglobl=True)
-                v = self.nsp.find(var.value)
+                if islet or isfor:
+                    # 未定義変数への代入時はint型のグローバル変数として定義する
+                    self.nsp.new(var.value, BasVariable.INT, forceglobl=True)
+                    v = self.nsp.find(var.value)
+                else:
+                    return None                     # 代入以外はエラー
         ty = v.type
         sub = ''
         if v.isarray():
-            if self.checksymbol('('):
+            if self.checksymbol('('):               # 配列要素
                 sub = '['
                 while True:
                     if a := self.expr():
@@ -1110,15 +1116,16 @@ class Bas2C:
                 self.nextsymbol(')')
                 sub += ']'
                 ty -= BasVariable.DIM
-        if ty == BasVariable.STR:
+            else:                                   # 配列全体
+                if not islet:
+                    return None;                    # 配列全体を指定できるのは代入のみ
+        if ty == BasVariable.STR:                   # 部分文字列 a[x]
             if self.checksymbol('['):
                 a = self.expect(self.expr())
                 self.nextsymbol(']')
                 sub += '[' + a.value + ']'
                 ty = BasVariable.CHAR
-        if ty >= BasVariable.DIM and not arrayok:
-            return None         # 配列全体は返せない
-        return BasToken(ty, f'{v.name}{sub}')
+        return BasVariable(f'{v.name}{sub}', ty)
 
     def defvar(self, ty):
         """変数/配列の定義"""
@@ -1176,9 +1183,11 @@ class Bas2C:
         else:
             return self.expect(self.expr()).value
 
-    def fncall(self, fn):
+    def fncall(self, var):
         """関数呼び出しを生成する"""
-        v = self.nsp.find(fn)               # 関数が定義済みか調べる
+        if not var.istype(BasToken.VARIABLE):
+            return None
+        v = self.nsp.find(var.value)        # 関数が定義済みか調べる
         if self.flag & Bas2C.UNDEFERR:
             self.expect(v or (self.bpass == 1)) # (パス1なら未定義でもよい)
         arg = ''                            # 引数を得る
@@ -1191,7 +1200,7 @@ class Bas2C:
             arg += ', '
         self.nextsymbol(')')
         # 未定義関数だったらFUNCTION型を返す
-        return BasToken(BasToken.FUNCTION if not v else v.type, f'{fn}({arg})')
+        return BasToken(BasToken.FUNCTION if not v else v.type, f'{var.value}({arg})')
 
     def exfncall(self, kw, isexpr=False):
         """BasKeyword kwが組込関数/外部関数であれば引数を与えて呼び出す"""
@@ -1478,9 +1487,9 @@ class Bas2C:
             elif r.istype(BasToken.KEYWORD):
                 if v := self.exfncall(r.value, True):   # 組込関数/外部関数
                     return v
-            elif v := self.lvalue(r):                   # 左辺値 or 関数名
-                if v.istype(BasToken.FUNCTION):
-                    return self.fncall(v.value)         # 関数呼び出し
+            elif v := self.lvalue(r):                   # 左辺値
+                return BasToken(v.type, v.name)
+            elif v := self.fncall(r):                   # 関数呼び出し
                 return v
             self.t.unfetch(r)                           # 該当なしなのでトークンを戻す
             return None
