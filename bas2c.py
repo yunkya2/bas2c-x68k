@@ -239,7 +239,7 @@ class BasVariable:
         """配列であればTrue"""
         return self.type >= self.DIM
 
-    def typename(self, fnres=False):
+    def typename(self, fnres=False, globl=False):
         map = { self.INT:   'int', \
                 self.CHAR:  'unsigned char', \
                 self.FLOAT: 'double', \
@@ -247,7 +247,7 @@ class BasVariable:
         if fnres and self.type == self.STR:
             return 'unsigned char *'        # strを返す関数の戻り値型
         ty = self.type
-        r = ''
+        r = '' if not globl else 'static '
         if ty >= self.STATICCONST:
             ty -= self.STATICCONST
             r = 'static const '
@@ -261,8 +261,7 @@ class BasVariable:
         if self.func:
             return f'{self.typename()} {self.name}({self.arg});\n'
         else:
-            r = 'static ' if globl else ''
-            r += f'{self.typename()} {self.name}{self.arg}'
+            r = f'{self.typename(globl=globl)} {self.name}{self.arg}'
             if self.init:
                 r += f' = {self.init}'
             return r + ';\n'
@@ -744,7 +743,8 @@ class Bas2C:
 
         # 変数定義 (int/char/float/str)
         if s := self.checkvartype():
-            return self.defvar(s.value)
+            self.defvar(s.value)
+            return ''
 
         elif s := self.checktype(BasToken.KEYWORD):
             if s.value == BasKeyword.EOL:
@@ -758,7 +758,8 @@ class Bas2C:
                 ty = BasVariable.INT
                 if t := self.checkvartype():
                     ty = t.value
-                return self.defvar(ty)
+                self.defvar(ty)
+                return ''
 
             elif s.value == BasKeyword.PRINT or s.value == BasKeyword.LPRINT:
                 lp = '' if s.value == BasKeyword.PRINT else 'l'
@@ -905,6 +906,7 @@ class Bas2C:
                 return f'case {x.value}:\n'
 
             elif s.value == BasKeyword.DEFAULT:
+                self.indentcnt -= 1
                 return 'default:\n'
 
             elif s.value == BasKeyword.ENDSWITCH:
@@ -1129,7 +1131,6 @@ class Bas2C:
 
     def defvar(self, ty):
         """変数/配列の定義"""
-        r = ''
         while True:
             # 変数名を取得する
             var = self.nexttype(BasToken.VARIABLE)
@@ -1156,7 +1157,6 @@ class Bas2C:
             # 複数の変数をまとめて定義するなら繰り返す
             if not self.checksymbol(','):
                 break
-        return r
 
     def initvar(self, ty):
         """変数/配列の初期値を得る"""
