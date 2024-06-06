@@ -441,9 +441,11 @@ class BasTokenGen:
                     else:
                         line = self.filebuf[self.fp:n + 1]
                         self.fp = n + 1
+            line = line.rstrip('\x1a')
+            if len(line) == 0:
+                return line
             self.lineno += 1
             self.baslineno += 1
-            line = line.rstrip('\x1a')
             if self.cindent >= 0 and len(line) > 0:
                 self.ccode += '\t' * self.cindent + '/*===' + self.getbascmnline(line) + '===*/\n'
             if self.verbose and self.bpass == 2:
@@ -577,6 +579,23 @@ class BasTokenGen:
         self.curlen = self.prelen
         return None
 
+    def peek(self):
+        """トークンを先読みする"""
+        if self.cached:
+            return self.cached[-1]
+        t = self.fetch()
+        self.cached.append(t)
+        return t
+
+    def skip(self):
+        """次の命令が来るまでトークンを読み飛ばす"""
+        while True:
+            t = self.fetch()
+            if t.issymbol(':') or \
+               t.iskeyword(BasKeyword.EOL) or \
+               t.iskeyword(BasKeyword.EOF):
+                return
+
 ##############################################################################
 
 class Bas2C:
@@ -618,22 +637,6 @@ class Bas2C:
             raise BasException2(err)
         return v
 
-    def nexttype(self, t):
-        """次のトークンが型tであることを確認して値を返す"""
-        return self.expect(self.t.fetch().istype(t))
-    def nextkeyword(self, k):
-        """次のトークンが予約語kであることを確認する"""
-        return self.expect(self.t.fetch().iskeyword(k), f'\'{BasKeyword.getkeyword(k)}\' がありません')
-    def nextsymbol(self, s):
-        """次のトークンがシンボルsであることを確認する"""
-        return self.expect(self.t.fetch().issymbol(s), f'\'{s}\' がありません')
-
-    def peek(self):
-        """次のトークンを先読みする"""
-        t = self.expect(self.t.fetch())
-        self.t.unfetch(t)
-        return t
-
     def checktype(self, t):
         """型tが出たら読み進む"""
         if (x := self.t.fetch()).istype(t):
@@ -654,6 +657,16 @@ class Bas2C:
         if (x := self.t.fetch()).isvartype():
             return x
         return self.t.unfetch(x)
+
+    def nexttype(self, t):
+        """次のトークンが型tであることを確認して値を返す"""
+        return self.expect(self.checktype(t)).value
+    def nextkeyword(self, k):
+        """次のトークンが予約語kであることを確認する"""
+        return self.expect(self.checkkeyword(k), f'\'{BasKeyword.getkeyword(k)}\' がありません')
+    def nextsymbol(self, s):
+        """次のトークンがシンボルsであることを確認する"""
+        return self.expect(self.checksymbol(s), f'\'{s}\' がありません')
 
     def gendefine(self):
         """グローバル変数、関数の定義を出力する"""
@@ -1021,7 +1034,7 @@ class Bas2C:
                 return r
 
             elif s.value == BasKeyword.ERROR:
-                x = self.expect(self.t.fetch())     # error命令は読み飛ばして無視
+                x = self.t.fetch()                  # error命令は読み飛ばして無視
                 return f'/* error {x.value} */\n'
 
             elif s.value == BasKeyword.END:
@@ -1064,7 +1077,7 @@ class Bas2C:
             return s.value
 
         else:
-            r = self.expect(self.t.fetch())
+            r = self.t.fetch()
             if s := self.lvalue(r, islet=True):             # 左辺値
                 self.nextkeyword(BasKeyword.EQ)
                 x = self.initvar(s.type)                    # 代入する値を得る
@@ -1089,11 +1102,11 @@ class Bas2C:
 
     def lvalue(self, var=None, islet=False, isfor=False):
         """左辺値(代入可能な変数/配列)を得る"""
-        var = self.expect(self.t.fetch()) if not var else var
+        var = self.t.fetch() if not var else var
         if not var.istype(BasToken.VARIABLE):
             return None
         v = self.nsp.find(var.value)
-        if self.peek().issymbol('('):               # 配列または関数呼び出し
+        if self.t.peek().issymbol('('):             # 配列または関数呼び出し
             if (not v) or (not v.isarray()):
                 return None                         # 関数呼び出し
         else:                                       # 単純変数
@@ -1204,7 +1217,7 @@ class Bas2C:
 
     def exfncall(self, kw, isexpr=False):
         """BasKeyword kwが組込関数/外部関数であれば引数を与えて呼び出す"""
-        nt = self.peek()    # 次のトークンを先読みする
+        nt = self.t.peek()  # 次のトークンを先読みする
 
         # 組込関数の特殊ケース (intは通常の予約語でもあるため先にチェックする)
         if kw == BasKeyword.INT and nt.issymbol('('):   # int(..) -> int$$(..)
@@ -1309,7 +1322,7 @@ class Bas2C:
 
         def checkops(self, map):
             """次のトークンが予約語でmap内にあるなら読み進む"""
-            t = self.expect(self.t.fetch())
+            t = self.t.fetch()
             if t.istype(BasToken.KEYWORD) and t.value in map:
                 return t
             return self.t.unfetch(t)
@@ -1507,7 +1520,7 @@ class Bas2C:
             except BasException1 as e:
                 self.error(e, finame)
             except BasException2:
-                pass
+                self.t.skip()
 
         self.setpass(2)     # pass 2
         fo.write('#include <basic0.h>\n')
@@ -1539,6 +1552,7 @@ class Bas2C:
                 pass
             except BasException2 as e:
                 self.error(e, finame)
+                self.t.skip()
         try:
             fo.write(self.nestclose())
         except BasException2 as e:
