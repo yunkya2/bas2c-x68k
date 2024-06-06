@@ -1,16 +1,22 @@
-# X-BASIC to C コンバータ bas2c.py
+# X-BASIC to C コンバータ bas2c (Python 版 & C++ 版)
 
 ## 概要
 
 X680x0 の C Compiler PRO-68K (XC) には BAStoC (BC.X) というコンバータが付属していて、X-BASIC のソースコードを C 言語に変換してコンパイルすることで高速化できたのですが、
 残念ながら [無償公開されている XC](http://retropc.net/x68000/software/sharp/xc21/) からは削除されています。
 
-このプログラムは BC.X の代替を目指して、X-BASIC のソースコードを C 言語に変換する Python スクリプトです。
-クロス開発環境 [elf2x68k](https://github.com/yunkya2/elf2x68k) と組み合わせて利用することを想定していますが、[MicroPython for X68000](https://github.com/yunkya2/micropython-x68k/blob/port-x68k/ports/x68k/README.md) 上でも動作するので、実機上での変換もできないことはないです (ただしめちゃくちゃ遅いです…)。
+このプログラムは BC.X の代替を目指して、X-BASIC のソースコードを C 言語に変換する Python スクリプト、および C++ プログラムです。
+
+Python 版はクロス開発環境 [elf2x68k](https://github.com/yunkya2/elf2x68k) と組み合わせて利用することを想定していますが、[MicroPython for X68000](https://github.com/yunkya2/micropython-x68k/blob/port-x68k/ports/x68k/README.md) 上でも動作するので、実機上での変換もできないことはないです (ただしめちゃくちゃ遅いです…)。
+
+C++ 版は、X680x0 実機環境での動作に対応するために Python 版のコードを元に開発しました。オリジナルの BC.X と比べるとかなり遅いですが、無償公開版 XC での BC.X の補完のために公開します。
 
 ## 使い方
 
-Linux (WSL) や MSYS2 等、Python3 が動作する環境で使用します。
+**以下の説明は Python 版についてのものです。
+X680x0 実機、エミュレータで動作する C++ 版については、[README-bas2c.txt](README-bas2c.txt) を参照してください。**
+
+Python 版は Linux (WSL) や MSYS2 等、Python3 が動作する環境で使用します。
 
 ### X-BASIC → C の変換
 
