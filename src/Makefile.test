@@ -1,0 +1,14 @@
+CC = g++
+CFLAGS = -g -DDEBUG
+
+TARGET = token tokengen namespace variable keyword bas2cexpr
+
+all: $(TARGET)
+
+%: %.cpp
+	$(CC) $(CFLAGS) $< -o $@
+
+clean:
+	-rm -rf $(TARGET)
+
+.PHONY: all clean
