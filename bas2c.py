@@ -618,6 +618,7 @@ class Bas2C:
         self.exfngroup = set()
         self.setpass(0)
         self.b_exit = 'b_exit' if not (flag & self.NOBINIT) else 'exit'
+        self.exitstatus = 0
 
     def setpass(self, bpass):
         """変換パスを設定する"""
@@ -1558,7 +1559,10 @@ class Bas2C:
         except BasException2 as e:
             self.error(e, finame)
 
+        return self.exitstatus
+
     def error(self, e, finame):
+        self.exitstatus = 1
         print(f'{finame:s}:{self.t.getlineno()}\t: error: {e}')
         if self.t.curline:
             print(self.t.curline,end='')
@@ -1624,18 +1628,25 @@ if __name__ == '__main__':
         else:
             if not finame:
                 finame = sys.argv[i]
-            else:
+            elif not foname:
                 foname = sys.argv[i]
         i += 1
 
     if finame != None and foname == None:
         foname = finame.replace('.bas','').replace('.BAS','') + '.c'
 
-    fh = open(finame, 'r', encoding=fileencoding(finame)) if finame else sys.stdin
-    fo = open(foname, 'w', encoding=focode) if foname and foname != '-' else sys.stdout
+    try:
+        fh = open(finame, 'r', encoding=fileencoding(finame)) if finame else sys.stdin
+    except:
+        print(f'{sys.argv[0]}: {finame} file not found')
+        sys.exit(1)
+
+    try:
+        fo = open(foname, 'w', encoding=focode) if foname and foname != '-' else sys.stdout
+    except:
+        print(f'{sys.argv[0]}: cannot create output file {foname}')
+        sys.exit(1)
 
     readdef()
     b = Bas2C(fh, flag, cindent)
-    b.start(fo, finame if finame else '<stdin>')
-
-    sys.exit(0)
+    sys.exit(b.start(fo, finame if finame else '<stdin>'))
