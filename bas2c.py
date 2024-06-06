@@ -429,46 +429,49 @@ class BasTokenGen:
     def getline(self):
         """必要があれば1行読み込む"""
         def readline():
-            line = ''
+            self.line = ''
             if self.fh:
-                line = self.fh.readline()
+                self.line = self.fh.readline()
             else:
                 if self.fp < len(self.filebuf):
                     n = self.filebuf.find('\n', self.fp)
                     if n < 0:
-                        line = self.filebuf[self.fp:]
+                        self.line = self.filebuf[self.fp:]
                         self.fp = len(self.filebuf)
                     else:
-                        line = self.filebuf[self.fp:n + 1]
+                        self.line = self.filebuf[self.fp:n + 1]
                         self.fp = n + 1
-            line = line.rstrip('\x1a')
-            if len(line) == 0:
-                return line
-            self.lineno += 1
-            self.baslineno += 1
-            if self.cindent >= 0 and len(line) > 0:
-                self.ccode += '\t' * self.cindent + '/*===' + self.getbascmnline(line) + '===*/\n'
-            if self.verbose and self.bpass == 2:
-                print(line, end='')
-            return line
-
-        if len(self.line) == 0:
-            self.line = readline()
-            if self.line.startswith('#c'):
-                while l := readline():
-                    if l.startswith('#endc'):
-                        break
-                    self.ccode += l
-                self.line = readline()
+            self.line = self.line.rstrip('\x1a')
 
             self.curline = self.line
             self.golineno = 0
             self.firsttoken = True
+            if len(self.line) == 0:
+                return None
+
+            self.lineno += 1
+            self.baslineno += 1
+            if self.cindent >= 0 and len(self.line) > 0:
+                self.ccode += '\t' * self.cindent + '/*===' + self.getbascmnline(self.line) + '===*/\n'
+            if self.verbose and self.bpass == 2:
+                print(self.line, end='')
+
             # 行番号があれば取得する
-            if m := re.match(r'[ \t]*(\d+)', self.line):
+            if m := re.match(r'[ \t]*(\d+)[ \t]*', self.line):
                 self.golineno = int(m.group(1))
                 self.baslineno = self.golineno
                 self.line = self.line[m.end():]
+            return True
+
+        if len(self.line) == 0:
+            readline()
+            # #c～#endcの間を取り込む
+            if self.line.startswith('#c'):
+                while readline():
+                    if self.line.startswith('#endc'):
+                        break
+                    self.ccode += self.line
+                readline()
         # 行頭の空白などは読み飛ばす
         self.line = self.line.lstrip(' \t\r')
         self.prelen = len(self.line)
