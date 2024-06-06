@@ -1,0 +1,8 @@
+*.o
+*.d
+*.x
+*.elf
+bas2c
+README.txt
+bas2c.def
+*.zip
