@@ -259,7 +259,7 @@ class BasVariable:
         if self.funcarg:
             return ''
         if self.func:
-            return f'{self.typename()} {self.name}({self.arg});\n'
+            return f'{self.typename(True)} {self.name}({self.arg});\n'
         else:
             r = f'{self.typename(globl=globl)} {self.name}{self.arg}'
             if self.init:

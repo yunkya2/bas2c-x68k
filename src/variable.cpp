@@ -62,7 +62,7 @@ std::string BasVariable::definition(bool globl) {
         return "";              // 関数の仮引数の定義は出力しない
     }
     if (func) {
-        return std::string(typname()) + " " + name + "(" + arg + ");\n";
+        return std::string(typname(true)) + " " + name + "(" + arg + ");\n";
     } else {
         auto r = std::string(typqual(globl)) + typname() + " " + name + arg;
         if (init != "") {
