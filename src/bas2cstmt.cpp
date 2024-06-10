@@ -369,6 +369,12 @@ std::unique_ptr<std::string> Bas2C::statement() {
         case BasKeyword::RETURN:
             if (checksymbol('(')) {
                 auto x = expr();
+                if (x && !(flag & Bas2C::F_BCCOMPAT)) {
+                    if (auto v = nsp->find(x->value, true)) {
+                        expect(!(v->isstr() && !v->funcarg),
+                                 ("str 型のローカル変数 " + v->name + " は関数の戻り値にはできません").c_str());
+                    }
+                }
                 nextsymbol(')');
                 if (x) {
                     out = "return " + x->value + ";\n";
@@ -544,8 +550,12 @@ std::unique_ptr<BasVariable> Bas2C::lvalue(std::unique_ptr<BasToken> var, bool i
             }
         }
     }
-    if (BasVariable::isstr(ty)) {           // 部分文字列 a[x]
-        if (checksymbol('[')) {
+    if (BasVariable::isstr(ty)) {
+        if (!(flag & Bas2C::F_BCCOMPAT)) {
+            expect(!(islet && v->funcarg),
+                   ("str 型の関数引数 " + v->name + " には代入できません").c_str());
+        }
+        if (checksymbol('[')) {             // 部分文字列 a[x]
             auto a = expect(expr());
             nextsymbol(']');
             sub += "[" + a->value + "]";

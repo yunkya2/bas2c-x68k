@@ -44,16 +44,18 @@ void BasNameSpace::setlocal(std::string name) {
 }
 
 // 名前がグローバルorローカル名前空間に定義されているかを調べる
-BasVariable* BasNameSpace::find(std::string name) {
+BasVariable* BasNameSpace::find(std::string name, bool localonly) {
     if (curlocal != nullptr) {
         auto it = curlocal->find(name);
         if (it != curlocal->end()) {
             return it->second;
         }
     }
-    auto it = glist.find(name);
-    if (it != glist.end()) {
-        return it->second;
+    if (!localonly) {
+        auto it = glist.find(name);
+        if (it != glist.end()) {
+            return it->second;
+        }
     }
     return nullptr;
 }

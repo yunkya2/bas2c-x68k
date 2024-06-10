@@ -66,8 +66,8 @@ public:
     std::string name;       // 変数名/関数名
     Type type;              // 型 (関数の場合は戻り値の型)
     std::string arg;        // 関数の引数 (配列の場合は要素数)
-private:
     std::string init;       // 初期値
     bool func;              // 関数ならtrue
     bool funcarg;           // 関数の仮引数ならtrue
+private:
 };

@@ -41,7 +41,7 @@ public:
     BasNameSpace() : bpass(0), curlocal(nullptr) {}
     void setpass(int bpass);
     void setlocal(std::string name = "");
-    BasVariable* find(std::string name);
+    BasVariable* find(std::string name, bool localonly = false);
     BasVariable* newVariable(std::string name, BasVariable::Type type, std::string arg = "", std::string init = "", bool func = false, bool funcarg = false, bool forceglobl = false);
     std::string definition(std::string name = "");
 

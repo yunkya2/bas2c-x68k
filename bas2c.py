@@ -267,7 +267,7 @@ class BasVariable:
             return r + ';\n'
 
     def __repr__(self):
-        return f'({self.typename()},{self.name},{self.type},{self.arg},{self.init},{self.func})'
+        return f'({self.typename()},{self.name},{self.type},{self.arg},{self.init},{self.func},{self.funcarg})'
 
 class BasNameSpace:
     """グローバル/ローカル名前空間を保持するクラス"""
@@ -290,12 +290,12 @@ class BasNameSpace:
         else:
             self.curlocal = None
 
-    def find(self, name):
+    def find(self, name, localonly=False):
         """名前がグローバルorローカル名前空間に定義されているかを調べる"""
         if self.curlocal != None:
             if v := self.curlocal.get(name, None):
                 return v
-        return self.glist.get(name, None)
+        return self.glist.get(name, None) if not localonly else None
 
     def new(self, name, type, arg='', init='', func=False, funcarg=False, forceglobl=False):
         """変数を名前空間に定義する"""
@@ -1003,6 +1003,10 @@ class Bas2C:
             elif s.value == BasKeyword.RETURN:
                 if self.checksymbol('('):
                     r = self.expr()
+                    if r and not (self.flag & Bas2C.BCCOMPAT):
+                        if v:= self.nsp.find(r.value, localonly=True):
+                            self.expect(not (v.type == BasVariable.STR and not v.funcarg), \
+                                    f'str 型のローカル変数 {v.name} は関数の戻り値にはできません')
                     self.nextsymbol(')')
                     if r:
                         return f'return {r.value};\n'
@@ -1138,8 +1142,10 @@ class Bas2C:
             else:                                   # 配列全体
                 if not islet:
                     return None;                    # 配列全体を指定できるのは代入のみ
-        if ty == BasVariable.STR:                   # 部分文字列 a[x]
-            if self.checksymbol('['):
+        if ty == BasVariable.STR:
+            if not (self.flag and Bas2C.BCCOMPAT):
+                self.expect(not (islet and v.funcarg), f'str 型の関数引数 {v.name} には代入できません')
+            if self.checksymbol('['):               # 部分文字列 a[x]
                 a = self.expect(self.expr())
                 self.nextsymbol(']')
                 sub += '[' + a.value + ']'
