@@ -1,4 +1,4 @@
-#!/bin/env python3
+#!/usr/bin/env python3
 #
 # X-BASIC to C converter bas2c.py
 # Copyright (c) 2024 Yuichi Nakamura (@yunkya2)
@@ -184,10 +184,10 @@ class BasKeyword:
         grp = ''
         w = 5000
         while l := fh.readline():
-            if m := re.match('\[(.*)\]',l):
+            if m := re.match(r'\[(.*)\]',l):
                 grp = m.group(1)
                 continue
-            m = re.match('(\w+)?\s+([\w$]+)\s*([\(\[]?[\w,-]*[\)\]]?)\s*:\s*(\w*)\(([#@&$%,]*)\)',l)
+            m = re.match(r'(\w+)?\s+([\w$]+)\s*([\(\[]?[\w,-]*[\)\]]?)\s*:\s*(\w*)\(([#@&$%,]*)\)',l)
             if not m:
                 continue
             cls.keyword[m.group(2)] = w
