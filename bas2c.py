@@ -1592,11 +1592,11 @@ def readdef():
 def fileencoding(fname):
     """ファイルのエンコーディングを推測する"""
     try:
-        with open(fname, 'r') as f:
+        with open(fname, 'r', encoding='utf-8') as f:
             f.read()
     except Exception as e:
         return 'cp932'
-    return None
+    return 'utf-8'
 
 def usage():
     print(f'usage: {sys.argv[0]} [-Dunbsv][-c[tabs]][-o output.c] input.bas')
@@ -1607,7 +1607,7 @@ if __name__ == '__main__':
     cindent = 0
     finame = None
     foname = None
-    focode = None
+    focode = 'utf-8'
     i = 1
     while i < len(sys.argv):
         if sys.argv[i][0] == '-':
